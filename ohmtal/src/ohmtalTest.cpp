@@ -164,14 +164,23 @@ int main(int argc, char **argv)
    Con::evaluatef("echo(\"Welcome to kork script... enter quit to leave...\");");
 
    while (gRunning) {
-      char* line = readline("> ");
-
-      if (line[0] == '\0') {
-         free(line);
+      char* raw_line = readline("> ");
+      // Check for Ctrl+D (EOF) which returns NULL
+      if (raw_line == nullptr) {
          continue;
       }
-      std::string code(line);
-      free(line);
+
+      // Handle empty lines
+      if (*raw_line == '\0') {
+         free(raw_line); // Still must free the empty buffer
+         continue;
+      }
+
+      // Safe conversion to std::string
+      std::string code(raw_line);
+
+      // Free the memory allocated by readline
+      free(raw_line);
 
       if (code == "quit" || code == "quit();" ) break;
 
