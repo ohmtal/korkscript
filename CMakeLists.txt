@@ -154,6 +154,14 @@ set(KS_TORQUE_TEST_SRCS
 )
 
 
+# XXTH >>>
+set(KS_OHMTAL_TEST_SRCS
+	${KS_SRCS}
+	${TORQUESIM_SRCS}
+	${TORQUESIM_BRIDGE_SRCS}
+	ohmtal/src/ohmtalTest.cpp
+)
+# <<< XXTH
 
 if (EMSCRIPTEN)
 
@@ -180,6 +188,16 @@ add_executable(csprintast ${KS_AST_PRINT_SRCS})
 add_executable(csapitest ${KS_API_TEST_SRCS})
 add_executable(torquetest ${KS_TORQUE_TEST_SRCS})
 add_executable(testrunner ${TEST_RUNNER_SRCS})
+
+# XXTH >>>
+add_executable(ohmtalTest.x86_64 ${KS_OHMTAL_TEST_SRCS})
+set_target_properties(ohmtalTest.x86_64 PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/ohmtal"
+)
+target_include_directories(ohmtalTest.x86_64 PRIVATE ./torqueSim)
+target_link_libraries(ohmtalTest.x86_64 readline)
+# <<< XXTH
+
 
 if (ENABLE_WASM3_BRIDGE)
 	target_link_libraries(torquetest wasm3)
