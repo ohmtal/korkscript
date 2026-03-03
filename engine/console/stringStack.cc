@@ -1,4 +1,11 @@
 //-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
 // Copyright (c) 2013 GarageGames, LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -22,7 +29,7 @@
 
 #include "embed/api.h"
 #include "embed/internalApi.h"
-#include "stringStack.h"
+#include "console/stringStack.h"
 
 void StringStack::getArgcArgv(StringTableEntry name, U32 *argc, KorkApi::ConsoleValue **in_argv, bool popStackFrame /* = false */)
 {
@@ -37,21 +44,7 @@ void StringStack::getArgcArgv(StringTableEntry name, U32 *argc, KorkApi::Console
    
    for(U32 i = 0; i < argCount; i++)
    {
-      U16 typeId = mStartTypes[startStack + i];
-      UINTPTR startData = mStartOffsets[startStack + i];
-      if (typeId == KorkApi::ConsoleValue::TypeInternalUnsigned ||
-          typeId == KorkApi::ConsoleValue::TypeInternalNumber)
-      {
-         // Copy value straight from buffer
-         startData += (UINTPTR)mBuffer;
-         mArgV[i+1] = KorkApi::ConsoleValue::makeRaw(((U64*)startData)[0], typeId);
-      }
-      else
-      {
-         mArgV[i+1] = KorkApi::ConsoleValue::makeTyped((void*)startData,
-                                                       mStartTypes[startStack + i],
-                                                       (KorkApi::ConsoleValue::Zone)(KorkApi::ConsoleValue::ZoneFunc + mFuncId));
-      }
+      mArgV[i+1] = getStackConsoleValue(startStack + i);
    }
    argCount++;
    
@@ -78,26 +71,111 @@ void StringStack::convertArgv(KorkApi::VmInternal* vm, U32 argc, const char*** i
    }
 }
 
-void StringStack::convertArgs(KorkApi::VmInternal* vm, U32 numArgs, KorkApi::ConsoleValue* args, const char **outArgs)
+void StringStack::performOp(U32 op, KorkApi::Vm* vm, KorkApi::TypeInfo* typeInfo)
 {
-   for(U32 i = 0; i < numArgs; i++)
-   {
-      if (!args[i].isString())
-      {
-         outArgs[i] = (const char*)args[i].evaluatePtr(vm->mAllocBase);
-      }
-      else
-      {
-         outArgs[i] = vm->valueAsString(args[i]);
-      }
-   }
-
+   KorkApi::ConsoleValue rhs = getStackConsoleValue(mStartStackSize-1);
+   KorkApi::ConsoleValue lhs = getConsoleValue();
+   
+   KorkApi::TypeInfo& info = typeInfo[rhs.typeId];
+   
+   rewind(); // only rhs is on other side
+   
+   KorkApi::ConsoleValue result = info.iFuncs.PerformOpFn(info.userPtr, vm, op, lhs, rhs);
+   setConsoleValue(vm->mInternal, result);
 }
 
-void StringStack::convertArgsReverse(KorkApi::VmInternal* vm, U32 numArgs, const char **args, KorkApi::ConsoleValue* outArgs)
+void StringStack::performOpReverse(U32 op, KorkApi::Vm* vm, KorkApi::TypeInfo* typeInfo)
 {
-   for(U32 i = 0; i < numArgs; i++)
+   KorkApi::ConsoleValue rhs = getStackConsoleValue(mStartStackSize-1);
+   KorkApi::ConsoleValue lhs = getConsoleValue();
+   
+   KorkApi::TypeInfo& info = typeInfo[lhs.typeId];
+   
+   rewind(); // only lhs is on other side
+   
+   KorkApi::ConsoleValue result = info.iFuncs.PerformOpFn(info.userPtr, vm, op, lhs, rhs);
+   setConsoleValue(vm->mInternal, result);
+}
+
+void StringStack::performUnaryOp(U32 op, KorkApi::Vm* vm, KorkApi::TypeInfo* typeInfo)
+{
+   KorkApi::ConsoleValue lhs = getConsoleValue();
+   KorkApi::TypeInfo& info = typeInfo[lhs.typeId];
+   KorkApi::ConsoleValue result = info.iFuncs.PerformOpFn(info.userPtr, vm, op, lhs, lhs);
+   setConsoleValue(vm->mInternal, result);
+}
+
+void StringStack::copyStoredValueToStack(KorkApi::VmInternal* vm, KorkApi::ConsoleValue v, void* ptr)
+{
+   if (ptr)
    {
-      outArgs[i] = KorkApi::ConsoleValue::makeString(args[i]);
+      KorkApi::TypeStorageInterface outputStorage = KorkApi::CreateExprStringStackStorage(vm,
+                                                                              *this,
+                                                                              0,
+                                                                              v.typeId);
+
+      KorkApi::TypeStorageInterface inputStorage = KorkApi::CreateRegisterStorageFromArg(vm, v);
+      
+      // NOTE: types should set head of stack to value if data pointer is nullptr in this case
+      vm->mTypes[v.typeId].iFuncs.CastValueFn(vm->mTypes[v.typeId].userPtr,
+                                                          vm->mVM,
+                                                          &inputStorage,
+                                                          &outputStorage,
+                                                          nullptr,
+                                                          0,
+                                                          v.typeId);
+   }
+   else
+   {
+      mValue = 0;
+      mType = 0;
+      mLen = 0;
+   }
+}
+
+void StringStack::setConsoleValue(KorkApi::VmInternal* vmInternal, KorkApi::ConsoleValue v)
+{
+   void* valueBase = nullptr;
+   
+   if (v.typeId != KorkApi::ConsoleValue::TypeInternalString && 
+       v.typeId < KorkApi::ConsoleValue::TypeBeginCustom)
+   {
+      mType = v.typeId;
+      mLen = 0;
+      validateBufferSize(mStart + mLen);
+      *((U64*)&mValue) = v.cvalue;
+      return;
+   }
+   else
+   {
+      valueBase = v.evaluatePtr(*mAllocBase);
+      if (valueBase != (mBuffer.data() + mStart)) // account for setting same head
+      {
+         if (v.typeId == KorkApi::ConsoleValue::TypeInternalString)
+         {
+            setStringValue((const char*)valueBase);
+         }
+         else if (valueBase)
+         {
+            KorkApi::TypeInfo info = (*mTypes)[v.typeId];
+            
+            if (info.valueSize != UINT_MAX)
+            {
+               mLen = (U32)info.valueSize;
+               memmove(mBuffer.data() + mStart, valueBase, mLen);
+               mValue = mStart;
+            }
+            else
+            {
+               copyStoredValueToStack(vmInternal, v, v.evaluatePtr(*mAllocBase));
+               return;
+            }
+         }
+         else
+         {
+            mValue = v.cvalue;
+         }
+      }
+      mType = v.typeId;
    }
 }

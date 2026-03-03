@@ -118,7 +118,7 @@ U32 FileStream::getStreamSize()
 bool FileStream::open(const char *i_pFilename, AccessMode i_openMode)
 {
    AssertWarn(0 == mStreamCaps, "FileStream::setPosition: the stream is already open");
-   AssertFatal(NULL != i_pFilename, "FileStream::open: NULL filename");
+   AssertFatal(nullptr != i_pFilename, "FileStream::open: nullptr filename");
 
    // make sure the file stream's state is clean
    clearBuffer();
@@ -215,7 +215,7 @@ bool FileStream::flush()
 bool FileStream::_read(const U32 i_numBytes, void *o_pBuffer)
 {
    AssertFatal(0 != mStreamCaps, "FileStream::_read: the stream isn't open");
-   AssertFatal(NULL != o_pBuffer || i_numBytes == 0, "FileStream::_read: NULL destination pointer with non-zero read request");
+   AssertFatal(nullptr != o_pBuffer || i_numBytes == 0, "FileStream::_read: nullptr destination pointer with non-zero read request");
 
    if (false == hasCapability(Stream::StreamRead))
    {
@@ -245,7 +245,7 @@ bool FileStream::_read(const U32 i_numBytes, void *o_pBuffer)
          readSize = ((mBuffTail + 1) >= mBuffPos) ? (mBuffTail + 1 - mBuffPos) : 0;
          readSize = getMin(readSize, remaining);
          calcBlockHead(mBuffPos, &blockHead);
-         dMemcpy(pDst, mBuffer + (mBuffPos - blockHead), readSize);
+         memcpy(pDst, mBuffer + (mBuffPos - blockHead), readSize);
          // reduce the remaining amount to read
          remaining -= readSize;
          // advance the buffer pointers
@@ -280,7 +280,7 @@ bool FileStream::_read(const U32 i_numBytes, void *o_pBuffer)
             {
                // copy as much as possible from the buffer to the destination
                remaining = getMin(remaining, mBuffTail - mBuffPos + 1);
-               dMemcpy(pDst, mBuffer + (mBuffPos - blockHead), remaining);
+               memcpy(pDst, mBuffer + (mBuffPos - blockHead), remaining);
                // advance the buffer pointer
                mBuffPos += remaining;
             }
@@ -316,7 +316,7 @@ bool FileStream::_read(const U32 i_numBytes, void *o_pBuffer)
 bool FileStream::_write(const U32 i_numBytes, const void *i_pBuffer)
 {
    AssertFatal(0 != mStreamCaps, "FileStream::_write: the stream isn't open");
-   AssertFatal(NULL != i_pBuffer || i_numBytes == 0, "FileStream::_write: NULL source buffer pointer on non-zero write request");
+   AssertFatal(nullptr != i_pBuffer || i_numBytes == 0, "FileStream::_write: nullptr source buffer pointer on non-zero write request");
 
    if (false == hasCapability(Stream::StreamWrite))
    {
@@ -348,7 +348,7 @@ bool FileStream::_write(const U32 i_numBytes, const void *i_pBuffer)
          writeSize = getMin(writeSize, remaining);
 
          AssertFatal(0 == writeSize || (mBuffPos - blockHead) < BUFFER_SIZE, "FileStream::_write: out of bounds buffer position");
-         dMemcpy(mBuffer + (mBuffPos - blockHead), pSrc, writeSize);
+         memcpy(mBuffer + (mBuffPos - blockHead), pSrc, writeSize);
          // reduce the remaining amount to be written
          remaining -= writeSize;
          // advance the buffer pointers
@@ -375,7 +375,7 @@ bool FileStream::_write(const U32 i_numBytes, const void *i_pBuffer)
          if ((mBuffPos + remaining) <= blockTail)
          {
             // write the data to the buffer
-            dMemcpy(mBuffer + (mBuffPos - blockHead), pSrc, remaining);
+            memcpy(mBuffer + (mBuffPos - blockHead), pSrc, remaining);
             // update the buffer pointers
             mBuffHead = mBuffPos;
             mBuffPos += remaining;
@@ -478,7 +478,7 @@ void FileStream::clearBuffer()
 //-----------------------------------------------------------------------------
 void FileStream::calcBlockHead(const U32 i_position, U32 *o_blockHead)
 {
-   AssertFatal(NULL != o_blockHead, "FileStream::calcBlockHead: NULL pointer passed for block head");
+   AssertFatal(nullptr != o_blockHead, "FileStream::calcBlockHead: nullptr pointer passed for block head");
 
    *o_blockHead = i_position/BUFFER_SIZE * BUFFER_SIZE;
 }
@@ -486,8 +486,8 @@ void FileStream::calcBlockHead(const U32 i_position, U32 *o_blockHead)
 //-----------------------------------------------------------------------------
 void FileStream::calcBlockBounds(const U32 i_position, U32 *o_blockHead, U32 *o_blockTail)
 {
-   AssertFatal(NULL != o_blockHead, "FileStream::calcBlockBounds: NULL pointer passed for block head");
-   AssertFatal(NULL != o_blockTail, "FileStream::calcBlockBounds: NULL pointer passed for block tail");
+   AssertFatal(nullptr != o_blockHead, "FileStream::calcBlockBounds: nullptr pointer passed for block head");
+   AssertFatal(nullptr != o_blockTail, "FileStream::calcBlockBounds: nullptr pointer passed for block tail");
 
    *o_blockHead = i_position/BUFFER_SIZE * BUFFER_SIZE;
    *o_blockTail = *o_blockHead + BUFFER_SIZE - 1;

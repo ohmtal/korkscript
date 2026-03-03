@@ -1,10 +1,19 @@
 #pragma once
+//-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
 #include "platform/types.h"
 #include <string>
 #include <string_view>
 #include <vector>
 #include <cctype>
-#include "core/stringTable.h"
+#include <cinttypes>
+
+// NOTE: needs Vector and String type set in SimpleLexer namespace
 
 namespace SimpleLexer
 {
@@ -65,7 +74,21 @@ enum class TokenType : U32
    opPCHAR_EXCL,      // '!'
    opPCHAR_TILDE,     // '~'
    
-   opCONCAT // @
+   opCONCAT, // @
+   
+   // Interpolated string control codes
+   STRBEG,   // $"  (push)
+   STREND    // "   (pop)  (includes end bit)
+};
+
+struct InterpolationState
+{
+   S32 depth;
+   
+   bool inLiteral;
+   bool inBrace;
+   bool needStrConcat;
+   bool doInterp;
 };
 
 struct Token
@@ -143,20 +166,23 @@ struct Token
    }
 };
 
-class Tokenizer
+template<class I> class Tokenizer
 {
 public:
-   explicit Tokenizer(_StringTable* st, std::string_view src, std::string filename = {})
-   : mStringTable(st), mFilename(std::move(filename))
+   explicit Tokenizer(I it, std::string_view src, String filename, bool enableInterpolation)
+   : mStringIntern(it), mFilename(std::move(filename))
    {
       mPos = {};
+      mPos.line = 1; // start from line 1
       mBytePos = 0;
       mSource.resize(src.size()+1);
       memcpy(&mSource[0], &src[0], src.size());
       mSource[src.size()] = '\0';
+      mInterpState = {};
+      mInterpState.doInterp = enableInterpolation;
    }
    
-   inline const std::string& filename() const { return mFilename; }
+   inline const String& filename() const { return mFilename; }
    inline int line()  const { return mPos.line; }
    inline int col()   const { return mPos.col;  }
    
@@ -193,17 +219,33 @@ public:
          
          "opCHAR",
          
-         "opCONCAT"
+         "opPCHAR_PLUS",      // '+'
+         "opPCHAR_MINUS",     // '-'
+         "opPCHAR_SLASH",     // '/'
+         "opPCHAR_ASTERISK",  // '*'
+         "opPCHAR_CARET",     // '^'
+         "opPCHAR_PERCENT",   // '%'
+         "opPCHAR_AMPERSAND", // '&'
+         "opPCHAR_PIPE",      // '|'
+         "opPCHAR_LESS",      // '<'
+         "opPCHAR_GREATER",   // '>'
+         "opPCHAR_EXCL",      // '!'
+         "opPCHAR_TILDE",     // '~'
+         
+         "opCONCAT",
+         
+         "STRBEG",
+         "STREND"
       };
       
       return map[(unsigned int)k];
    }
    
-   std::string stringValue(const Token& t)
+   String stringValue(const Token& t)
    {
-      if (t.kind == TokenType::TAGATOM || t.kind == TokenType::STRATOM || t.kind == TokenType::DOCBLOCK)
+      if (t.kind == TokenType::TAGATOM || t.kind == TokenType::STREND || t.kind == TokenType::STRATOM || t.kind == TokenType::DOCBLOCK)
       {
-         return std::string(mSource.begin() + t.stringValue.offset, mSource.begin() + t.stringValue.offset + t.stringValue.len);
+         return String(mSource.begin() + t.stringValue.offset, mSource.begin() + t.stringValue.offset + t.stringValue.len);
       }
       else if (t.kind == TokenType::IDENT || t.kind == TokenType::VAR)
       {
@@ -220,13 +262,13 @@ public:
       return &mSource[offset];
    }
    
-   std::string toString(const Token &t)
+   String toString(const Token &t)
    {
       char buf[4096];
       
-      if (t.kind == TokenType::TAGATOM || t.kind == TokenType::STRATOM)
+      if (t.kind == TokenType::TAGATOM || t.kind == TokenType::STRATOM || t.kind == TokenType::STREND)
       {
-         std::string ss(mSource.begin() + t.stringValue.offset, mSource.begin() + t.stringValue.offset + t.stringValue.len);
+         String ss(mSource.begin() + t.stringValue.offset, mSource.begin() + t.stringValue.offset + t.stringValue.len);
          snprintf(buf, sizeof(buf), "%s=\"%s\"", kindToString(t.kind), ss.c_str());
       }
       else if (t.kind == TokenType::IDENT || t.kind == TokenType::VAR)
@@ -235,12 +277,12 @@ public:
       }
       else if (t.kind == TokenType::DOCBLOCK)
       {
-         std::string ss(mSource.begin() + t.stringValue.offset, mSource.begin() + t.stringValue.offset + t.stringValue.len);
+         String ss(mSource.begin() + t.stringValue.offset, mSource.begin() + t.stringValue.offset + t.stringValue.len);
          snprintf(buf, sizeof(buf), "%s=///%s", kindToString(t.kind), ss.c_str());
       }
       else if (t.kind == TokenType::INTCONST)
       {
-         snprintf(buf, sizeof(buf), "%s=INT(%llu)", kindToString(t.kind), t.ivalue);
+         snprintf(buf, sizeof(buf), "%s=INT(%" PRIu64 ")", kindToString(t.kind), t.ivalue);
       }
       else if (t.kind == TokenType::FLTCONST)
       {
@@ -255,13 +297,75 @@ public:
          snprintf(buf, sizeof(buf), "%s", kindToString(t.kind));
       }
       
-      return std::string(buf);
+      return String(buf);
+   }
+   
+   Token scanInterpLiteralSegment()
+   {
+      char endQuote = 0;
+      
+      if (peek() == '"')
+      {
+         // blank string, so ignore
+         Token te = make(TokenType::STREND);
+         te.stringValue.offset = (U32)mBytePos;
+         te.stringValue.len = 0;
+         mSource[mBytePos] = '\0';
+         // ...
+         advance();
+         mInterpState.depth--;
+         mInterpState.inLiteral = false;
+         mInterpState.inBrace = mInterpState.depth > 0;
+         return te;
+      }
+      
+      Token tok = decodeStringInPlace(&mSource[0],
+                                      mSource.size(),
+                                      mBytePos,
+                                      TokenType::STRATOM,
+                                      '"',
+                                      '{',
+                                      &endQuote,
+                                      true);
+      
+      if (endQuote == '"')
+      {
+         // End of string
+         mInterpState.depth--;
+         mInterpState.inLiteral = false;
+         mInterpState.inBrace = mInterpState.depth > 0;
+         tok.kind = TokenType::STREND;
+         return tok;
+      }
+      else if (endQuote == '{')
+      {
+         mInterpState.inBrace = true;
+         mInterpState.inLiteral = false;
+         mInterpState.needStrConcat = true;
+      }
+      
+      return tok;
+   }
+   
+   
+   bool havePendingConcat() const { return mInterpState.needStrConcat; }
+   
+   Token emitPendingConcat()
+   {
+      mInterpState.needStrConcat = false;
+      return makeConcat(0);
    }
    
    Token next()
    {
       for (;;)
       {
+         // Interpolated strings - handle pending @
+         if (havePendingConcat())
+         {
+            return emitPendingConcat();
+         }
+         
          Token t;
          
          if (eof())
@@ -269,51 +373,109 @@ public:
             return make(TokenType::END);
          }
          
-         // Handle newlines / whitespace
-         if (peek() == '\r')
-         {
-            advance();
-            continue;
-         }
+         // Skip skipping spaces if in interp mode
+         bool noSkipSpaces = mInterpState.depth > 0 &&
+         mInterpState.inLiteral &&
+         mInterpState.inBrace == false;
          
-         if (peek() == '\n')
+         if (!noSkipSpaces)
          {
-            advanceNewline();
-            continue;
-         }
-         
-         if (isSpace(peek()))
-         {
-            skipSpaces();
-            continue;
-         }
-         
-         // Line docblocks: ("///" [^/] ... newline)+
-         if (matchDocblockStart())
-         {
-            return scanDocblock();
-         }
-         
-         // C++-style comment //
-         if (peek() == '/' && peek(1) == '/' && !(peek(2) == '/' && peek(3) != '/'))
-         {
-            skipLine(); continue;
-         }
-         
-         // C-style comment /* ... */
-         if (bpeek2('/', '*'))
-         {
-            if (!skipBlockComment())
+            // Handle newlines / whitespace
+            if (peek() == '\r')
             {
-               return illegal("unterminated block comment");
+               advance();
+               continue;
             }
-            continue;
+            
+            if (peek() == '\n')
+            {
+               advanceNewline();
+               continue;
+            }
+            
+            if (isSpace(peek()))
+            {
+               skipSpaces();
+               continue;
+            }
+            
+            // Line docblocks: ("///" [^/] ... newline)+
+            if (matchDocblockStart())
+            {
+               return scanDocblock();
+            }
+            
+            // C++-style comment //
+            if (peek() == '/' && peek(1) == '/' && !(peek(2) == '/' && peek(3) != '/'))
+            {
+               skipLine(); continue;
+            }
+            
+            // C-style comment /* ... */
+            if (bpeek2('/', '*'))
+            {
+               if (!skipBlockComment())
+               {
+                  return illegal("unterminated block comment");
+               }
+               continue;
+            }
+         }
+         
+         // Handle being inside the string literal (NOT the expression)
+         if (mInterpState.depth > 0 &&
+             mInterpState.inLiteral &&
+             mInterpState.inBrace == false)
+         {
+            t = scanInterpLiteralSegment();
+            if (t.kind != TokenType::NONE)
+            {
+               return t;
+            }
+         }
+         
+         // Handle being inside the interpolation expression i.e. { ... } inside $""
+         if (mInterpState.inBrace)
+         {
+            char c = peek();
+            
+            if (c == ';')
+            {
+               advance();
+               return illegal("';' not allowed inside interpolated expression");
+            }
+            
+            if (c == '}')
+            {
+               advance();
+               mInterpState.inBrace = false;
+               
+               // Finished the { expr } for this interpolation.
+               // Next token should be a literal piece or closing quote.
+               mInterpState.inLiteral = true;
+               mInterpState.needStrConcat = true;
+               
+               continue;
+            }
+         }
+         
+         // Handle start of interpolated string (i.e. $")
+         if (bpeek2('$', '"') && mInterpState.doInterp)
+         {
+            advance(); // '$'
+            advance(); // '"'
+            
+            mInterpState.depth++;
+            mInterpState.inLiteral = true;
+            mInterpState.inBrace = false;
+            
+            return make(TokenType::STRBEG);
          }
          
          // Quoted strings
          if (beither2('"', '\''))
          {
-            return scanString(peek() == '\'');
+            return scanString(peek() == '\'' ? TokenType::TAGATOM : TokenType::STRATOM, peek());
          }
          
          // Multi-char operators (longest first)
@@ -367,8 +529,8 @@ public:
          }
          
          // Single-char tokens
-         static const std::string singles = "?[]()+-*/<>|.!:;{},&%^~=.";
-         if (singles.find(peek()) != std::string::npos)
+         static const String singles = "?[]()+-*/<>|.!:;{},&%^~=.";
+         if (singles.find(peek()) != String::npos)
          {
             char ch = (char)peek();
             Token t = makeChar(ch);
@@ -383,12 +545,14 @@ public:
    }
    
 private:
-   std::vector<char> mSource;
-   std::string mFilename;
+   Vector<char> mSource;
+   String mFilename;
    S64 mBytePos;
    SrcPos mPos;
+   InterpolationState mInterpState;
+   
 public:
-   _StringTable* mStringTable;
+   I mStringIntern;
 private:
    
    // --- utilities
@@ -742,14 +906,14 @@ private:
          }
       }
       
-      std::string s = std::string(mSource.begin() + start,
-                                  mSource.begin() + start + (mBytePos - start));
+      String s = String(mSource.begin() + start,
+                        mSource.begin() + start + (mBytePos - start));
       
       if (sawDot || sawExp)
       {
          // float
          Token t = make(TokenType::FLTCONST);
-         t.value = std::stod(s);
+         t.value = std::stod(s.c_str());
          
 #ifndef PRECISE_NUMBERS
          F32 f = static_cast<F32>(t.value);
@@ -761,7 +925,7 @@ private:
       {
          // integer
          Token t = make(TokenType::INTCONST);
-         t.ivalue = std::stoll(s);
+         t.ivalue = std::stoll(s.c_str());
          return t;
       }
    }
@@ -776,11 +940,11 @@ private:
          advance();
       }
       
-      std::string s = std::string(mSource.begin() + start,
+      String s = String(mSource.begin() + start,
                                   mSource.begin() + start + (mBytePos - start));
       
       // std::stoi handles 0x prefix with base 16 if specified, but since we consumed, parse manually
-      int val = std::stoi(s, nullptr, 16);
+      int val = std::stoi(s.c_str(), nullptr, 16);
       Token t = make(TokenType::INTCONST);
       t.ivalue = val;
       return t;
@@ -808,7 +972,7 @@ private:
       }
    }
    
-   Token decodeStringInPlace(char* buf, S64 bufEnd, S64& idx, TokenType tokenType)
+   Token decodeStringInPlace(char* buf, S64 bufEnd, S64& idx, TokenType tokenType, const char quote, const char altQuote, char* outQuote, bool dontSkipStart=false)
    {
       const S64 open = idx;
       if (open >= bufEnd || bufEnd <= 0 || idx < 0)
@@ -816,7 +980,6 @@ private:
          return illegal("end of input");
       }
       
-      const char quote = buf[open];
       bool firstOut = true;
       
       // Track boundaries:
@@ -824,7 +987,10 @@ private:
       S64 effective_boundary = -1; // overridden by \c0 (first occurrence)
       
       // advance past the opening quote
-      ++idx;
+      if (!dontSkipStart)
+      {
+         ++idx;
+      }
       
       Token t = make(tokenType);
       
@@ -849,11 +1015,15 @@ private:
             buf[idx++] = '\0';
             continue;
          }
-         if (c == quote)
+         if (c == quote || c == altQuote)
          {
             // closing quote
             base_boundary = idx; // exclusive
             buf[idx++] = '\0';   // zap the closing quote
+            if (outQuote)
+            {
+               *outQuote = c;
+            }
             break;
          }
          
@@ -975,7 +1145,7 @@ private:
       : base_boundary;
       
       // 2) compaction pass over [start, boundary):
-      const S64 start = open + 1;
+      const S64 start = !dontSkipStart ? (open + 1) : open;
       S64 read = start;
       S64 write = start;
       while (read < boundary)
@@ -997,12 +1167,15 @@ private:
       return t;
    }
    
-   Token scanString(bool isTag)
+   Token scanString(TokenType type, char quote)
    {
       return decodeStringInPlace(&mSource[0],
                                  mSource.size(),
                                  mBytePos,
-                                 isTag ? TokenType::TAGATOM : TokenType::STRATOM);
+                                 type,
+                                 quote,
+                                 quote,
+                                 nullptr);
    }
    
    // --- identifiers / keywords
@@ -1093,7 +1266,7 @@ private:
          
          // Default to IDENT
          t.kind = TokenType::IDENT;
-         t.stString = mStringTable->insertn(&mSource[t.stringValue.offset], (U32)(mBytePos - t.stringValue.offset));
+         t.stString = mStringIntern.internN(&mSource[t.stringValue.offset], (U32)(mBytePos - t.stringValue.offset));
       }
       
       return t;
@@ -1138,7 +1311,7 @@ private:
       // TODO: TYPEID match
       
       // Build token as a view into the source
-      t.stString = mStringTable->insertn(&mSource[t.stringValue.offset], (U32)(mBytePos - t.stringValue.offset));
+      t.stString = mStringIntern.internN(&mSource[t.stringValue.offset], (U32)(mBytePos - t.stringValue.offset));
       return t;
    }
 };

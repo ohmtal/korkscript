@@ -1,4 +1,11 @@
 //-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
 // Copyright (c) 2012 GarageGames, LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -31,160 +38,27 @@
 #endif
 
 class Stream;
-class DataChunker;
 
 #include "platform/platform.h"
-#include "console/simpleLexer.h"
-#include "console/ast.h"
 #include "console/codeBlock.h"
 
-#ifndef _TVECTOR_H_
-#include "core/tVector.h"
-#endif
+#include "core/dataChunker.h"
+#include "embed/compilerOpcodes.h"
+
+struct StmtNode;
+
+namespace SimpleParser
+{
+template<class T> class ASTGen;
+}
 
 namespace Compiler
 {
-   /// The opcodes for the TorqueScript VM.
-   enum CompiledInstructions
-   {
-      OP_FUNC_DECL,
-      OP_CREATE_OBJECT,
-      OP_ADD_OBJECT,
-      OP_END_OBJECT,
-      // Added to fix the stack issue [7/9/2007 Black]
-      OP_FINISH_OBJECT,
-
-      OP_JMPIFFNOT,
-      OP_JMPIFNOT,
-      OP_JMPIFF,
-      OP_JMPIF,
-      OP_JMPIFNOT_NP,
-      OP_JMPIF_NP,    // 10
-      OP_JMP,
-      OP_RETURN,
-      // fixes a bug when not explicitly returning a value
-      OP_RETURN_VOID,
-      OP_RETURN_FLT,
-      OP_RETURN_UINT,
-
-      OP_CMPEQ,
-      OP_CMPGR,
-      OP_CMPGE,
-      OP_CMPLT,
-      OP_CMPLE,
-      OP_CMPNE,
-      OP_XOR,         // 20
-      OP_MOD,
-      OP_BITAND,
-      OP_BITOR,
-      OP_NOT,
-      OP_NOTF,
-      OP_ONESCOMPLEMENT,
-
-      OP_SHR,
-      OP_SHL,
-      OP_AND,
-      OP_OR,          // 30
-
-      OP_ADD,
-      OP_SUB,
-      OP_MUL,
-      OP_DIV,
-      OP_NEG,
-
-      OP_SETCURVAR,
-      OP_SETCURVAR_CREATE,
-      OP_SETCURVAR_ARRAY,
-      OP_SETCURVAR_ARRAY_CREATE,
-
-      OP_LOADVAR_UINT,// 40
-      OP_LOADVAR_FLT,
-      OP_LOADVAR_STR,
-      OP_LOADVAR_VAR,
-
-      OP_SAVEVAR_UINT,
-      OP_SAVEVAR_FLT,
-      OP_SAVEVAR_STR,
-      OP_SAVEVAR_VAR,
-
-      OP_SETCUROBJECT,
-      OP_SETCUROBJECT_NEW,
-      OP_SETCUROBJECT_INTERNAL,
-
-      OP_SETCURFIELD,
-      OP_SETCURFIELD_ARRAY, // 50
-      OP_SETCURFIELD_TYPE,
-
-      OP_LOADFIELD_UINT,
-      OP_LOADFIELD_FLT,
-      OP_LOADFIELD_STR,
-
-      OP_SAVEFIELD_UINT,
-      OP_SAVEFIELD_FLT,
-      OP_SAVEFIELD_STR,
-
-      OP_STR_TO_UINT,
-      OP_STR_TO_FLT,
-      OP_STR_TO_NONE,  // 60
-      OP_FLT_TO_UINT,
-      OP_FLT_TO_STR,
-      OP_FLT_TO_NONE,
-      OP_UINT_TO_FLT,
-      OP_UINT_TO_STR,
-      OP_UINT_TO_NONE,
-      OP_COPYVAR_TO_NONE,
-
-      OP_LOADIMMED_UINT,
-      OP_LOADIMMED_FLT,
-      OP_TAG_TO_STR,
-      OP_LOADIMMED_STR, // 70
-      OP_DOCBLOCK_STR,  // 76
-      OP_LOADIMMED_IDENT,
-
-      OP_CALLFUNC_RESOLVE,
-      OP_CALLFUNC,
-
-      OP_ADVANCE_STR,
-      OP_ADVANCE_STR_APPENDCHAR,
-      OP_ADVANCE_STR_COMMA,
-      OP_ADVANCE_STR_NUL,
-      OP_REWIND_STR,
-      OP_TERMINATE_REWIND_STR,  // 80
-      OP_COMPARE_STR,
-
-      OP_PUSH,          // String
-      OP_PUSH_UINT,     // Integer
-      OP_PUSH_FLT,      // Float
-      OP_PUSH_VAR,      // Variable
-      OP_PUSH_FRAME,    // Frame
-
-      OP_ASSERT,
-      OP_BREAK,
-      
-      OP_ITER_BEGIN,       ///< Prepare foreach iterator.
-      OP_ITER_BEGIN_STR,   ///< Prepare foreach$ iterator.
-      OP_ITER,             ///< Enter foreach loop.
-      OP_ITER_END,         ///< End foreach loop.
-
-      
-      // NEW OPCODES
-      
-      // Exceptions
-      OP_PUSH_TRY,
-      OP_PUSH_TRY_STACK,
-      OP_POP_TRY,
-      OP_THROW,
-      OP_DUP_UINT,
-      
-      
-      OP_INVALID   // 90
-   };
-
    struct Resources;
 
    //------------------------------------------------------------
 
-   F64 consoleStringToNumber(const char *str, StringTableEntry file = 0, U32 line = 0);
+   F64 consoleStringToNumber(Resources* res, const char *str, StringTableEntry file = 0, U32 line = 0);
    
    U32 compileBlock(StmtNode *block, CodeStream &codeStream, U32 ip);
 
@@ -212,14 +86,18 @@ namespace Compiler
       FullEntry *tail; // so we have stable ids
       U32 numIdentStrings;
       
+      U32 addNoAddress(StringTableEntry ste);
       U32 add(StringTableEntry ste, U32 ip);
       void reset();
       void write(Stream &st);
       void build(StringTableEntry** strings,  U32** stringOffsets, U32* numStrings);
+      U32 append(CompilerIdentTable &other);
 
       CompilerIdentTable(Resources* _res) : res(_res)
       {
-         list = NULL;
+         list = nullptr;
+         tail = nullptr;
+         numIdentStrings = 0;
       }
    };
 
@@ -242,7 +120,7 @@ namespace Compiler
       CompilerStringTable(Resources* _res) : res(_res)
       {
          totalLen = 0;
-         list = NULL;
+         list = nullptr;
          memset(buf, 0, sizeof(buf));
       }
 
@@ -272,7 +150,7 @@ namespace Compiler
       CompilerFloatTable(Resources* _res) : res(_res)
       {
          count = 0;
-         list = NULL;
+         list = nullptr;
       }
 
       U32 add(F64 value);
@@ -288,21 +166,60 @@ namespace Compiler
    void evalSTEtoCode(Resources* res, StringTableEntry ste, U32 ip, U32 *ptr);
    void compileSTEtoCode(Resources* res, StringTableEntry ste, U32 ip, U32 *ptr);
 
-   static inline StringTableEntry CodeToSTE(Resources* res, StringTableEntry* stringList, U32 *code, U32 ip)
+   static inline StringTableEntry CodeToSTE(Resources* res, StringTableEntry* stringList, const U32 *code, U32 ip)
    {
       U32 offset = *((U32*)(code+ip));
-      return offset == 0 ? NULL : stringList[offset-1];
+      return offset == 0 ? nullptr : stringList[offset-1];
    }
+
+   struct VarTypeTableEntry
+   {
+      VarTypeTableEntry *next;
+      StringTableEntry name;
+      StringTableEntry typeName;
+      S32 typeId;
+   };
+
+   struct VarTypeTable
+   {
+      VarTypeTableEntry* table;
+      Resources* res;
+
+      VarTypeTableEntry* lookupVar(StringTableEntry name);
+      void reset();
+
+      VarTypeTable()
+      {
+         table = nullptr;
+      }
+   };
 
    struct Resources
    {
+      enum 
+      {
+         VarTypeStackSize = 3
+      };
+
       CompilerStringTable *currentStringTable, globalStringTable, functionStringTable;
       CompilerFloatTable  *currentFloatTable,  globalFloatTable,  functionFloatTable;
-      DataChunker          consoleAllocator;
+      KorkApi::VMChunker   consoleAllocator;
       CompilerIdentTable   identTable;
+      CompilerIdentTable   typeTable;
+
+      VarTypeTable globalVarTypes;
+      VarTypeTable localVarTypes[VarTypeStackSize];
+      U32 curLocalVarStackPos;
+
+      SimpleParser::ASTGen<KorkApi::VMStringTable>* currentASTGen;
+      KorkApi::ConsumerCallback logFn;
+      void* logUser;
 
       bool syntaxError;
       bool allowExceptions;
+      bool allowTuples;
+      bool allowTypes;
+      bool allowStringInterpolation;
 
       void (*STEtoCode)(Resources* res, StringTableEntry ste, U32 ip, U32 *ptr);
 
@@ -322,18 +239,46 @@ namespace Compiler
       void setCurrentFloatTable (CompilerFloatTable* cst) { currentFloatTable  = cst; }
 
       CompilerIdentTable &getIdentTable() { return identTable; }
+      CompilerIdentTable &getTypeTable() { return typeTable; }
 
       void precompileIdent(StringTableEntry ident);
+      S32 precompileType(StringTableEntry ident);
       void resetTables();
 
       void *consoleAlloc(U32 size) { return consoleAllocator.alloc(size);  }
       void consoleAllocReset()     { consoleAllocator.freeBlocks(); }
 
-      Resources() : globalStringTable(this), functionStringTable(this), globalFloatTable(this), functionFloatTable(this), identTable(this)
+      void pushLocalVarContext(); 
+      void popLocalVarContext();
+      VarTypeTableEntry* getVarInfo(StringTableEntry varName, StringTableEntry typeName = nullptr);
+
+      void printf(U32 level, const char *_format, ...);
+      
+      StringTableEntry emptyString;
+
+      Resources() : globalStringTable(this), functionStringTable(this), globalFloatTable(this), functionFloatTable(this), identTable(this), typeTable(this)
       {
          STEtoCode = evalSTEtoCode;
+         curLocalVarStackPos = 0;
          syntaxError = false;
          allowExceptions = false;
+         allowTuples = false;
+         allowTypes = false;
+         currentASTGen = nullptr;
+         emptyString = nullptr;
+         logFn = nullptr;
+         logUser = nullptr;
+         
+         globalVarTypes.res = this;
+         for (U32 i=0; i<VarTypeStackSize; i++)
+         {
+            localVarTypes[i].res = this;
+         }
+         
+         curLocalVarStackPos = 0;
+         currentASTGen = nullptr;
+         
+         resetTables();
       }
    };
 };
@@ -354,6 +299,8 @@ public:
    enum Constants
    {
       BlockSize = 16384,
+      MaxCalls = 65535,
+      MaxVarStackDepth
    };
    
 protected:
@@ -383,22 +330,29 @@ protected:
    
    /// @name Code fixing stacks
    /// {
-   Vector<U32> mFixList;
-   Vector<U32> mFixStack;
-   Vector<bool> mFixLoopStack;
-   Vector<PatchEntry> mPatchList;
+   KorkApi::Vector<U32> mFixList;
+   KorkApi::Vector<U32> mFixStack;
+   KorkApi::Vector<bool> mFixLoopStack;
+   KorkApi::Vector<PatchEntry> mPatchList;
    /// }
+
+
+   KorkApi::Vector<S32> mReturnTypeStack;
    
-   Vector<U32> mBreakLines; ///< Line numbers
+   KorkApi::Vector<U32> mBreakLines; ///< Line numbers
    
    const char* mFilename;
+
+   U32 mCurrentReturnType;
+   
+   U32 mNumFuncCalls;
    
 public:
    Compiler::Resources* mResources;
    
 public:
 
-   CodeStream(Compiler::Resources* res) : mCode(0), mCodeHead(NULL), mCodePos(0), mFilename(NULL), mResources(res)
+   CodeStream(Compiler::Resources* res) : mCode(0), mCodeHead(nullptr), mCodePos(0), mFilename(nullptr), mResources(res)
    {
    }
    
@@ -408,8 +362,8 @@ public:
       
       if (mCode)
       {
-         dFree(mCode->data);
-         delete mCode;
+         KorkApi::VMem::Delete(mCode->data);
+         KorkApi::VMem::Delete(mCode);
       }
    }
    
@@ -508,9 +462,42 @@ public:
       return mBreakLines.size() / 2;
    }
    
-   void emitCodeStream(U32 *size, U32 **stream, U32 **lineBreaks);
+   void emitCodeStream(U32 *size, U32 **stream, U32 **lineBreaks, U32* numFuncCalls, void*** funcCallsPtr);
    
    void reset();
+
+   void pushReturnType(S32 typeId)
+   {
+      mReturnTypeStack.push_back(typeId);
+   }
+
+   void popReturnType()
+   {
+      mReturnTypeStack.pop_back();
+   }
+
+   S32 getReturnType()
+   {
+      if (mReturnTypeStack.empty())
+      {
+         return -1;
+      }
+      else
+      {
+         return mReturnTypeStack.back();
+      }
+   }
+   
+   U32 addFuncCall()
+   {
+      U32 cn = ++mNumFuncCalls;
+      if (cn > MaxCalls)
+      {
+         // Fallback for max calls reached
+         cn = 0;
+      }
+      return cn;
+   }
 };
 
 #endif

@@ -1,12 +1,13 @@
+//-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
 #include "platform/platform.h"
-#include "console/simpleLexer.h"
-#include "console/ast.h"
-#include "console/compiler.h"
-#include "console/simpleParser.h"
-#include "core/fileStream.h"
 #include <stdio.h>
 #include "embed/api.h"
-#include "embed/internalApi.h" // debug
 #include "core/freeListHandleHelpers.h"
 #include <emscripten/bind.h>
 
@@ -79,20 +80,23 @@ struct NSFuncCtx
 {
    Vm* vm; // Useful reference to vm
    JsVal cb; // handler
+   JsVal wrappedCtx; // JSCTX
 };
 
 // Wrapper for JS TypeInfo values
 // Converted from input objects in VmJS::registerType
 struct TypeBinding
 {
-   Vm* vm = nullptr;
+   Vm* vm;
+   JsVal vmPeer;
    
    // stable C-string storage
    std::string nameBuf;
    std::string inspectorBuf;
    std::string prepScratch;
    
-   dsize_t size = 0;
+   dsize_t fieldSize;
+   dsize_t valueSize;
    
    // JS callbacks
    JsVal cb_setValue;
@@ -101,12 +105,15 @@ struct TypeBinding
    JsVal cb_prepData;
    
    TypeBinding() : 
+   vmPeer(JsVal::undefined()),
    cb_setValue(JsVal::undefined()),
    cb_copyValue(JsVal::undefined()),
    cb_getTypeName(JsVal::undefined()),
    cb_prepData(JsVal::undefined())
    {
-      
+      vm = nullptr;
+      fieldSize = 0;
+      valueSize = 0;
    }
 };
 
@@ -115,6 +122,7 @@ struct TypeBinding
 struct ClassBinding 
 {
    JsVal peer;
+   JsVal vmPeer;
 
    // stable storage for C-string fields
    std::string nameBuf;
@@ -136,6 +144,7 @@ struct ClassBinding
    JsVal cb_cf_setByName;
    
    ClassBinding() : 
+   vmPeer(JsVal::undefined()),
    cb_create(JsVal::undefined()),
    cb_destroy(JsVal::undefined()),
    cb_processArgs(JsVal::undefined()),
@@ -159,24 +168,25 @@ struct ObjBinding
    Vm* vm;
    VMObject* vmObject;
    ClassBinding* klass;  // backlink to class binding
+   JsVal vmPeer;
    JsVal         peer; // JS peer returned by create()
    
    ObjBinding() : mAllocNumber(0), mGeneration(0), 
                   vm(nullptr), vmObject(nullptr), 
-                  klass(nullptr), peer(JsVal::undefined())
+                  klass(nullptr), peer(JsVal::undefined()), vmPeer(JsVal::undefined())
    {
       
    }
 
    void reset()
    {
-      vm = NULL;
-      vmObject = NULL;
-      klass = NULL;
+      vm = nullptr;
+      vmObject = nullptr;
+      klass = nullptr;
    }
 };
 
-typedef FreeListPtr<ObjBinding, FreeListHandle::Basic32> ObjToIdList;
+typedef FreeListPtr<ObjBinding, FreeListHandle::Basic32, std::vector> ObjToIdList;
 
 static ObjToIdList g_byHandle;
 
@@ -202,7 +212,7 @@ ObjBinding* lookup_wrapper_from_peer(JsVal& val)
    {
       return find_wrapper_from_js(val["vmBindingId"].as<U32>());
    }
-   return NULL;
+   return nullptr;
 }
 
 // Attach a JS object to VMObject::userPtr (replaces existing if present)
@@ -252,7 +262,7 @@ static void CVFromJS(const JsVal& v, WrappedConsoleValue& outV)
    else if (v.isNumber()) 
    {
       double d = v.as<double>();
-      outV.cv.setFloat(d);
+      outV.cv = KorkApi::ConsoleValue::makeNumber(d);
    }
 }
 
@@ -270,14 +280,14 @@ static void CVFromJSReturn(Vm* vm, const JsVal& v, ConsoleValue& outV)
    else if (v.isNumber()) 
    {
       double d = v.as<double>();
-      outV.setFloat(d);
+      outV = KorkApi::ConsoleValue::makeNumber(d);
    }
 }
 
 // Convert CV -> JS value
 static JsVal JSFromCV(Vm* vm, const ConsoleValue& v)
 {
-   if (v.isInt())    return JsVal(static_cast<double>(vm->valueAsInt(v)));
+   if (v.isUnsigned())    return JsVal(vm->valueAsInt(v));
    if (v.isFloat())  return JsVal(vm->valueAsFloat(v));
    const char* s = vm->valueAsString(v);
    // TODO: type'd values
@@ -326,7 +336,7 @@ static VMObject* Enum_GetAtIndexThunk(VMObject* object, U32 index);
 //
 
 static ConsoleValue CF_GetFieldByNameThunk(Vm* vm, VMObject* object, const char* name);
-static void CF_SetFieldByNameThunk(Vm* vm, VMObject* object, const char* name, ConsoleValue value);
+static void CF_SetFieldByNameThunk(Vm* vm, VMObject* object, const char* name, const char* array, ConsoleValue value);
 
 //
 // TypeInfo Thunks
@@ -338,7 +348,7 @@ static void Type_SetValueThunk(
                                void* dptr,
                                S32 argc,
                                ConsoleValue* argv,
-                               const EnumTable* tbl,
+                               void* tbl,
                                BitSet32 flag,
                                U32 typeId);
 
@@ -346,7 +356,7 @@ static ConsoleValue Type_CopyValueThunk(
                                         void* userPtr,
                                         Vm* vm,
                                         void* sptr,
-                                        const EnumTable* tbl,
+                                        void* tbl,
                                         BitSet32 flag,
                                         U32 requestedType,
                                         U32 requestedZone);
@@ -445,9 +455,9 @@ public:
    }
    
    // evalCode(code, filename) -> string|number
-   JsVal evalCode(const std::string& code, const std::string& filename)
+   JsVal evalCode(const std::string& code, const std::string& filename, const std::string& modPath)
    {
-      ConsoleValue v = mVm->evalCode(code.c_str(), filename.c_str());
+      ConsoleValue v = mVm->evalCode(code.c_str(), filename.c_str(), modPath.c_str());
       return JSFromCV(mVm, v);
    }
    
@@ -460,7 +470,7 @@ public:
       // argv must be const char** for the VM's call(); convert all args to strings
       std::vector<void*> scratch;
       std::vector<std::string> strBuf(argc);
-      std::vector<const char*> argv(argc, nullptr);
+      std::vector<KorkApi::ConsoleValue> argv(argc);
       
       for (int i = 0; i < argc; ++i)
       {
@@ -468,30 +478,18 @@ public:
          if (v.isString()) 
          {
             strBuf[i] = v.as<std::string>();
+            argv[i] = KorkApi::ConsoleValue::makeString(strBuf[i].c_str());
          } 
          else if (v.isNumber()) 
          {
             // Keep textual semantics for VM argv
             double d = v.as<double>();
-            if (std::isfinite(d) && std::floor(d) == d) 
-            {
-               // integer print
-               char tmp[32];
-               std::snprintf(tmp, sizeof(tmp), "%lld", static_cast<long long>(d));
-               strBuf[i] = tmp;
-            } 
-            else 
-            {
-               char tmp[64];
-               std::snprintf(tmp, sizeof(tmp), "%.17g", d);
-               strBuf[i] = tmp;
-            }
+            argv[i] = KorkApi::ConsoleValue::makeNumber(v.as<double>());
          } 
          else 
          {
-            strBuf[i] = ""; // unsupported becomes empty
+            argv[i] = KorkApi::ConsoleValue();
          }
-         argv[i] = strBuf[i].c_str();
       }
       
       ConsoleValue v = mVm->call(argc, argv.data());
@@ -503,13 +501,13 @@ public:
    {
       WrappedConsoleValue wcv;
       CVFromJS(jsVal, wcv);
-      mVm->setGlobalVariable(StringTable->insert(name.c_str()), wcv.cv);
+      mVm->setGlobalVariable(mVm->internString(name.c_str()), wcv.cv);
    }
    
    // getGlobal(name) -> string|number
    JsVal getGlobal(const std::string& name) 
    {
-      ConsoleValue v = mVm->getGlobalVariable(StringTable->insert(name.c_str()));
+      ConsoleValue v = mVm->getGlobalVariable(mVm->internString(name.c_str()));
       return JSFromCV(mVm, v);
    }
    
@@ -518,6 +516,7 @@ public:
       // Build & own a ClassBinding for this registration
       auto kb = std::make_unique<ClassBinding>();
       kb->peer = jsSpec;
+      kb->vmPeer = wrap_vm(this);
       
       // name (required)
       if (!js_has_own(jsSpec, "name")) 
@@ -556,7 +555,7 @@ public:
       
       // Fill ClassInfo
       ClassInfo info{};
-      info.name     =  StringTable->insert(kb->nameBuf.c_str());
+      info.name     =  mVm->internString(kb->nameBuf.c_str());
       info.userPtr  = kb.get();        // engine will pass this as 'user' to iCreate
       info.numFields = 0;
       info.fields    = nullptr;
@@ -576,7 +575,7 @@ public:
       info.iCustomFields.IterateFields      = nullptr;
       info.iCustomFields.GetFieldByIterator = nullptr;
       info.iCustomFields.GetFieldByName     = &CF_GetFieldByNameThunk;
-      info.iCustomFields.SetFieldByName     = &CF_SetFieldByNameThunk;
+      //info.iCustomFields.SetCustomFieldByName     = &CF_SetFieldByNameThunk;
       
       // Register
       ClassId cid = mVm->registerClass(info);
@@ -592,6 +591,7 @@ public:
       // Build & keep a TypeBinding alive for this type
       auto tb = std::make_unique<TypeBinding>();
       tb->vm = mVm;
+      tb->vmPeer = wrap_vm(this);
       
       // name (required)
       if (!js_has_own(jsSpec, "name")) return -1;
@@ -603,10 +603,15 @@ public:
          tb->inspectorBuf = jsSpec["inspectorFieldType"].as<std::string>();
       }
       
-      // optional size
-      if (js_has_own(jsSpec, "size"))
+      // optional sizes
+
+      if (js_has_own(jsSpec, "fieldSize"))
       {
-         tb->size = static_cast<dsize_t>(jsSpec["size"].as<unsigned>());
+         tb->fieldSize = static_cast<dsize_t>(jsSpec["fieldSize"].as<unsigned>());
+      }
+      if (js_has_own(jsSpec, "valueSize"))
+      {
+         tb->valueSize = static_cast<dsize_t>(jsSpec["valueSize"].as<unsigned>());
       }
       
       // callbacks
@@ -620,15 +625,15 @@ public:
       
       // Fill TypeInfo
       TypeInfo info{};
-      info.name                =  StringTable->insert(tb->nameBuf.c_str());
-      info.inspectorFieldType  = tb->inspectorBuf.empty() ? nullptr :  StringTable->insert((StringTableEntry)tb->inspectorBuf.c_str());
+      info.name                =  mVm->internString(tb->nameBuf.c_str());
+      info.inspectorFieldType  = tb->inspectorBuf.empty() ? nullptr :  mVm->internString((StringTableEntry)tb->inspectorBuf.c_str());
       info.userPtr             = tb.get();
-      info.size                = tb->size;
+      info.fieldSize           = tb->fieldSize;
+      info.valueSize           = tb->valueSize;
       
-      info.iFuncs.SetValue             = &Type_SetValueThunk;
-      info.iFuncs.CopyValue            = &Type_CopyValueThunk;
+      //info.iFuncs.SetValue             = &Type_SetValueThunk;
+      //info.iFuncs.CopyValue            = &Type_CopyValueThunk;
       info.iFuncs.GetTypeClassNameFn   = &Type_GetTypeClassNameThunk;
-      info.iFuncs.PrepDataFn           = &Type_PrepDataThunk;
       
       TypeId tid = mVm->registerType(info);
       
@@ -639,9 +644,9 @@ public:
    // --- Namespace lookups / links ---
    uintptr_t findNamespace(const std::string& name, const std::string& package = std::string())
    {
-      auto ns = mVm->findNamespace(StringTable->insert(name.c_str()),
+      auto ns = mVm->findNamespace(mVm->internString(name.c_str()),
                                    package.empty() ? (StringTableEntry)nullptr
-                                   : StringTable->insert(package.c_str()));
+                                   : mVm->internString(package.c_str()));
       return (uintptr_t)ns;
    }
    
@@ -677,22 +682,22 @@ public:
 
    void activatePackage(const std::string& pkg)    
    { 
-      mVm->activatePackage(StringTable->insert(pkg.c_str())); 
+      mVm->activatePackage(mVm->internString(pkg.c_str())); 
    }
    
    void deactivatePackage(const std::string& pkg) 
    { 
-      mVm->deactivatePackage( StringTable->insert(pkg.c_str())); 
+      mVm->deactivatePackage( mVm->internString(pkg.c_str())); 
    }
    
    bool linkNamespace(const std::string& parent, const std::string& child)   
    {
-      return mVm->linkNamespace((StringTableEntry)parent.c_str(), StringTable->insert(child.c_str()));
+      return mVm->linkNamespace(mVm->internString(parent.c_str()), mVm->internString(child.c_str()));
    }
    
    bool unlinkNamespace(const std::string& parent, const std::string& child) 
    {
-      return mVm->unlinkNamespace((StringTableEntry)parent.c_str(),  StringTable->insert(child.c_str()));
+      return mVm->unlinkNamespace(mVm->internString(parent.c_str()),  mVm->internString(child.c_str()));
    }
    
    bool linkNamespaceById(uintptr_t parentPtr, uintptr_t childPtr)   
@@ -707,7 +712,7 @@ public:
    
    bool isNamespaceFunction(uintptr_t nsPtr, const std::string& name) 
    {
-      return mVm->isNamespaceFunction((VMNamespace*)nsPtr,  StringTable->insert(name.c_str()));
+      return mVm->isNamespaceFunction((VMNamespace*)nsPtr,  mVm->internString(name.c_str()));
    }
    
    // call into a namespace function and return string|number
@@ -720,7 +725,7 @@ public:
       
       int argc = jsArgv["length"].as<int>();
       std::vector<std::string> buf(argc);
-      std::vector<const char*> argv(argc);
+      std::vector<KorkApi::ConsoleValue> argv(argc);
       
       for (int i=0;i<argc;++i) 
       {
@@ -728,31 +733,43 @@ public:
          if (v.isString()) 
          {
             buf[i] = v.as<std::string>();
+            argv[i] = KorkApi::ConsoleValue::makeString(buf[i].c_str());
          }
          else if (v.isNumber()) 
          {
             double d = v.as<double>();
-            char tmp[64];
-            if (std::isfinite(d) && std::floor(d)==d)
-            {
-               std::snprintf(tmp,sizeof(tmp), "%lld", (long long)d);
-            }
-            else
-            {
-               std::snprintf(tmp,sizeof(tmp), "%.17g", d);
-            }
-            buf[i] = tmp;
-         } else buf[i] = "";
-         argv[i] = buf[i].c_str();
+            argv[i] = KorkApi::ConsoleValue::makeNumber(d);
+         } 
+         else 
+         {
+            buf[i] = "";
+            argv[i] = KorkApi::ConsoleValue();
+         }
       }
       
       ConsoleValue ret{};
-      bool ok = mVm->callNamespaceFunction((VMNamespace*)nsPtr, StringTable->insert(name.c_str()), argc, argv.data(), ret);
+      bool ok = mVm->callNamespaceFunction((VMNamespace*)nsPtr, 
+                                           mVm->internString(name.c_str()), 
+                                           argc, 
+                                           argv.data(), 
+                                           ret);
       if (!ok) 
       {
          return JsVal::null();
       }
       return JSFromCV(mVm, ret);
+   }
+
+
+   static JsVal wrap_vm(VmJS* p) 
+   {
+     if (!p) return JsVal::undefined();
+     JsVal Module = JsVal::global("Module");
+     return Module.call<JsVal>(
+         "wrapPointer",
+         JsVal(reinterpret_cast<std::uintptr_t>(p)),
+         Module["VmJS"] // your class_<VmJS>("Vm") name
+     );
    }
    
    void addNamespaceFunction(uintptr_t nsPtr,
@@ -771,6 +788,7 @@ public:
       auto ctx = std::make_unique<NSFuncCtx>();
       ctx->vm = mVm;
       ctx->cb = cb;
+      ctx->wrappedCtx = wrap_vm(this);
       NSFuncCtx* raw = ctx.get();
       mNSFuncBindings.push_back(std::move(ctx));
       
@@ -779,35 +797,35 @@ public:
       if (kind == "string") 
       {
          mVm->addNamespaceFunction(
-                                   (VMNamespace*)nsPtr, StringTable->insert(name.c_str()),
+                                   (VMNamespace*)nsPtr, mVm->internString(name.c_str()),
                                    &NS_StringThunk, raw, usage.c_str(), (S32)minArgs, (S32)maxArgs
                                    );
       } 
       else if (kind == "int") 
       {
          mVm->addNamespaceFunction(
-                                   (VMNamespace*)nsPtr, StringTable->insert(name.c_str()),
+                                   (VMNamespace*)nsPtr, mVm->internString(name.c_str()),
                                    &NS_IntThunk, raw, usage.c_str(), (S32)minArgs, (S32)maxArgs
                                    );
       } 
       else if (kind == "float") 
       {
          mVm->addNamespaceFunction(
-                                   (VMNamespace*)nsPtr, StringTable->insert(name.c_str()),
+                                   (VMNamespace*)nsPtr, mVm->internString(name.c_str()),
                                    &NS_FloatThunk, raw, usage.c_str(), (S32)minArgs, (S32)maxArgs
                                    );
       } 
       else if (kind == "bool") 
       {
          mVm->addNamespaceFunction(
-                                   (VMNamespace*)nsPtr, StringTable->insert(name.c_str()),
+                                   (VMNamespace*)nsPtr, mVm->internString(name.c_str()),
                                    &NS_BoolThunk, raw, usage.c_str(), (S32)minArgs, (S32)maxArgs
                                    );
       } 
       else if (kind == "void") 
       {
          mVm->addNamespaceFunction(
-                                   (VMNamespace*)nsPtr, StringTable->insert(name.c_str()),
+                                   (VMNamespace*)nsPtr, mVm->internString(name.c_str()),
                                    &NS_VoidThunk, raw, usage.c_str(), (S32)minArgs, (S32)maxArgs
                                    );
       }
@@ -823,7 +841,7 @@ EMSCRIPTEN_BINDINGS(kork_mVmmodule) {
    class_<VmJS>("Vm")
       .constructor<JsVal>()
       .function("evalCode", &VmJS::evalCode)
-      .function("call",     &VmJS::call)
+      .function("call",     &VmJS::call, allow_raw_pointers())
       .function("setGlobal",&VmJS::setGlobal)
       .function("getGlobal",&VmJS::getGlobal)
       .function("registerClass",&VmJS::registerClass)
@@ -862,7 +880,7 @@ static const char* NS_StringThunk(void* obj, void* userPtr, S32 argc, const char
    
    JsVal r = ctx->cb(
                      vmObjRef ? vmObjRef->peer : JsVal::undefined(),
-                     vmPeer,
+                     ctx->wrappedCtx,
                      make_js_argv(argc, argv)
                      );
    
@@ -897,7 +915,7 @@ static S32 NS_IntThunk(void* obj, void* userPtr, S32 argc, const char* argv[])
    
    JsVal r = ctx->cb(
                      vmObjRef ? vmObjRef->peer : JsVal::undefined(),
-                     vmPeer,
+                     ctx->wrappedCtx,
                      make_js_argv(argc, argv)
                      );
    
@@ -917,7 +935,7 @@ static F32 NS_FloatThunk(void* obj, void* userPtr, S32 argc, const char* argv[])
    
    JsVal r = ctx->cb(
                      vmObjRef ? vmObjRef->peer : JsVal::undefined(),
-                     vmPeer,
+                     ctx->wrappedCtx,
                      make_js_argv(argc, argv)
                      );
    
@@ -937,7 +955,7 @@ static void NS_VoidThunk(void* obj, void* userPtr, S32 argc, const char* argv[])
    
    ctx->cb(
            vmObjRef ? vmObjRef->peer : JsVal::undefined(),
-           vmPeer,
+           ctx->wrappedCtx,
            make_js_argv(argc, argv)
            );
 }
@@ -955,7 +973,7 @@ static bool NS_BoolThunk(void* obj, void* userPtr, S32 argc, const char* argv[])
    
    JsVal r = ctx->cb(
                      vmObjRef ? vmObjRef->peer : JsVal::undefined(),
-                     vmPeer,
+                     ctx->wrappedCtx,
                      make_js_argv(argc, argv)
                      );
    
@@ -982,9 +1000,9 @@ static VMObject* FindByNameThunk(void* user, StringTableEntry name, VMObject* pa
    if (!js_is_nullish(ret)) 
    {
       ObjBinding* binding = lookup_wrapper_from_peer(ret);
-      return binding ? binding->vmObject : NULL;
+      return binding ? binding->vmObject : nullptr;
    }
-   return NULL;
+   return nullptr;
 }
 
 static VMObject* FindByPathThunk(void* user, const char* path)
@@ -1001,10 +1019,10 @@ static VMObject* FindByPathThunk(void* user, const char* path)
    if (!js_is_nullish(ret)) 
    {
       ObjBinding* binding = lookup_wrapper_from_peer(ret);
-      return binding ? binding->vmObject : NULL;
+      return binding ? binding->vmObject : nullptr;
    }
 
-   return NULL;
+   return nullptr;
 }
 
 static VMObject* FindByInternalNameThunk(void* user, StringTableEntry internalName, bool recursive, VMObject* parent)
@@ -1022,9 +1040,9 @@ static VMObject* FindByInternalNameThunk(void* user, StringTableEntry internalNa
    if (!js_is_nullish(ret)) 
    {
       ObjBinding* binding = lookup_wrapper_from_peer(ret);
-      return binding ? binding->vmObject : NULL;
+      return binding ? binding->vmObject : nullptr;
    }
-   return NULL;
+   return nullptr;
 }
 
 static VMObject* FindByIdThunk(void* user, SimObjectId objectId)
@@ -1054,15 +1072,16 @@ static void Class_CreateThunk(void* user, Vm* vm, CreateClassReturn* outP)
    auto* ob = new ObjBinding();
    ob->klass = kb;
    VmJS* vmPeer = static_cast<VmJS*>(vm->getUserPtr());
+   ob->vmPeer = vmPeer->wrap_vm(vmPeer);
 
    if (!js_is_nullish(kb->cb_create))
    {
-      ob->peer = kb->cb_create(kb->peer, vmPeer);
+      ob->peer = kb->cb_create(kb->peer, kb->vmPeer);
    }
    else
    {
       delete ob;
-      ob = NULL;
+      ob = nullptr;
    }
 
    if (!js_is_nullish(ob->peer))
@@ -1095,7 +1114,7 @@ static void Class_DestroyThunk(void* user, Vm* vm, void* createdPtr)
 
    if (ob && !js_is_nullish(kb->cb_destroy))
    {
-      kb->cb_destroy(kb->peer, vmPeer, ob->peer);
+      kb->cb_destroy(kb->peer, kb->vmPeer, ob->peer);
    }
    delete ob;
 }
@@ -1114,7 +1133,7 @@ static bool Class_ProcessArgsThunk(Vm* vm, void* createdPtr, const char* name, b
    for (int i=0;i<argc;++i) jsArgv.emplace_back(JsVal(argv[i] ? std::string(argv[i]) : std::string()));
    JsVal jsArray = JsVal::array(jsArgv);
 
-   return kb->cb_processArgs(vmPeer, ob->peer,
+   return kb->cb_processArgs(ob->vmPeer, ob->peer,
                              JsVal(name ? name : ""), JsVal(isDatablock), JsVal(internalName), jsArray).as<bool>();
 }
 
@@ -1133,7 +1152,7 @@ static bool Class_AddObjectThunk(Vm* vm, VMObject* object, bool placeAtRoot, U32
    ob->vmObject = object;
    vm->incVMRef(object);
    
-   bool ret = kb->cb_addObject(vmPeer, ob->peer,
+   bool ret = kb->cb_addObject(ob->vmPeer, ob->peer,
                            JsVal(placeAtRoot), JsVal(groupAddId)).as<bool>();
 
    if (ret)
@@ -1142,8 +1161,8 @@ static bool Class_AddObjectThunk(Vm* vm, VMObject* object, bool placeAtRoot, U32
    }
    else
    {
-      ob->vm = NULL;
-      ob->vmObject = NULL;
+      ob->vm = nullptr;
+      ob->vmObject = nullptr;
       vm->decVMRef(object);
    }
 
@@ -1162,14 +1181,14 @@ static void Class_RemoveObjectThunk(void* user, Vm* vm, VMObject* object)
 
    if (kb && !js_is_nullish(kb->cb_removeObject)) 
    {
-      kb->cb_removeObject(kb->peer, vmPeer, ob->peer).as<bool>();
+      kb->cb_removeObject(kb->peer, kb->vmPeer, ob->peer).as<bool>();
    }
 
    if (ob)
    {
       vm->decVMRef(ob->vmObject);
-      ob->vm = NULL;
-      ob->vmObject = NULL;
+      ob->vm = nullptr;
+      ob->vmObject = nullptr;
    }
 }
 
@@ -1241,16 +1260,16 @@ static ConsoleValue CF_GetFieldByNameThunk(Vm* vm, VMObject* object, const char*
    return cv;
 }
 
-static void CF_SetFieldByNameThunk(Vm* vm, VMObject* object, const char* name, ConsoleValue value)
+static void CF_SetFieldByNameThunk(Vm* vm, VMObject* object, const char* name, const char* array, ConsoleValue value)
 {
    auto* ob = static_cast<ObjBinding*>(object ? object->userPtr : nullptr);
    auto* kb = ob ? ob->klass : nullptr;
    
    // CV -> JS (number or string). Use VM for string conversion when needed.
    JsVal jsV;
-   if (value.isInt()) 
+   if (value.isUnsigned()) 
    {
-      jsV = JsVal((double)value.getInt());
+      jsV = JsVal(value.getInt());
    }
    else if (value.isFloat()) 
    {
@@ -1271,14 +1290,14 @@ static void CF_SetFieldByNameThunk(Vm* vm, VMObject* object, const char* name, C
       kb->cb_cf_setByName(ob->peer, JsVal(name ? name : ""), jsV);
    }
 }
-
+/*
 static void Type_SetValueThunk(
                                void* userPtr,
                                Vm* vm,
                                void* dptr,
                                S32 argc,
                                ConsoleValue* argv,
-                               const EnumTable* tbl,
+                               void* tbl,
                                BitSet32 flag,
                                U32 typeId)
 {
@@ -1326,7 +1345,7 @@ static ConsoleValue Type_CopyValueThunk(
                                         void* userPtr,
                                         Vm* vm,
                                         void* sptr,
-                                        const EnumTable* tbl,
+                                        void* tbl,
                                         BitSet32 flag,
                                         U32 requestedType,
                                         U32 requestedZone)
@@ -1352,59 +1371,22 @@ static ConsoleValue Type_CopyValueThunk(
    CVFromJSReturn(vm, r, cv);
    return cv;
 }
+*/
 
 static const char* Type_GetTypeClassNameThunk(void* userPtr) {
    auto* tb = static_cast<TypeBinding*>(userPtr);
    if (!tb || js_is_nullish(tb->cb_getTypeName)) 
    {
       // fallback to the registered type name
-      return StringTable->insert(tb ? tb->nameBuf.c_str() : "");
+      return tb->vm->internString(tb ? tb->nameBuf.c_str() : "");
    }
    
    JsVal r = tb->cb_getTypeName();
    if (r.isString())
    {
-      return StringTable->insert(r.as<std::string>().c_str());
+      return tb->vm->internString(r.as<std::string>().c_str());
    }
    
-   return StringTable->insert(tb->nameBuf.c_str());
+   return tb->vm->internString(tb->nameBuf.c_str());
 }
-
-static const char* Type_PrepDataThunk(
-                                      void* userPtr,
-                                      Vm* vm,
-                                      const char* data,
-                                      char* buffer,
-                                      U32 bufferLen)
-{
-   auto* tb = static_cast<TypeBinding*>(userPtr);
-   if (!tb || js_is_nullish(tb->cb_prepData))
-   {
-      return data;
-   }
-   
-   VmJS* vmPeer = static_cast<VmJS*>(vm->getUserPtr());
-   
-   JsVal r = tb->cb_prepData(
-                             vmPeer,
-                             JsVal(data ? std::string(data) : std::string()),
-                             JsVal((uintptr_t)buffer),
-                             JsVal(bufferLen)
-                             );
-   
-   if (r.isNumber())
-   {
-      uintptr_t p = r.as<uintptr_t>();
-      return reinterpret_cast<const char*>(p);
-   }
-   
-   if (r.isString()) 
-   {
-      tb->prepScratch = r.as<std::string>();
-      return tb->prepScratch.c_str();
-   }
-   
-   return buffer ? buffer : data;
-}
-
 

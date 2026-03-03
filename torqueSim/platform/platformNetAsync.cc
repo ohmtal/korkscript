@@ -21,6 +21,8 @@
 //-----------------------------------------------------------------------------
 
 #include "platform/platform.h"
+#include "platform/platformProcess.h"
+#include "platform/platformString.h"
 #include "platform/threads/mutex.h"
 #include "platform/threads/thread.h"
 #include "platform/platformNetAsync.h"
@@ -40,7 +42,7 @@ NetAsync gNetAsync;
 
 #define LOOKUP_REQUEST_CHECK_INTERVAL	500
 
-void* gNetAsyncMutex = NULL;
+void* gNetAsyncMutex = nullptr;
 
 static void lockNetAsyncMutex()
 {
@@ -111,11 +113,11 @@ void NetAsync::run()
       return;
 
    mRunning = true;
-   NameLookupRequest* lookupRequest = NULL;
+   NameLookupRequest* lookupRequest = nullptr;
 
    while (isRunning())
    {
-      lookupRequest = NULL;
+      lookupRequest = nullptr;
 
       // lock 
       lockNetAsyncMutex();
@@ -132,7 +134,7 @@ void NetAsync::run()
       unlockNetAsyncMutex();
 
       // if we have a lookup request
-      if (lookupRequest != NULL)
+      if (lookupRequest != nullptr)
       {
           NetAddress address;
 	       Net::Error error = Net::stringToAddress(lookupRequest->remoteAddr, &address, true);
@@ -146,9 +148,9 @@ void NetAsync::run()
          else
          {
             // copy the stuff we need from the hostent 
-            dMemset(lookupRequest->out_h_addr, 0, 
+            memset(lookupRequest->out_h_addr, 0, 
                    sizeof(lookupRequest->out_h_addr));
-            dMemcpy(lookupRequest->out_h_addr, &address, sizeof(address));
+            memcpy(lookupRequest->out_h_addr, &address, sizeof(address));
 
             lookupRequest->out_h_length = sizeof(address);
             lookupRequest->complete = true;
@@ -168,7 +170,7 @@ bool NetAsync::checkLookup(NetSocket socket, void* out_h_addr,
    lockNetAsyncMutex();
    bool found = false;
    // search for the socket
-   Vector<NameLookupRequest*>::iterator iter;
+   std::vector<NameLookupRequest*>::iterator iter;
    for (iter = mLookupRequests.begin(); 
         iter != mLookupRequests.end(); 
         ++iter)
@@ -176,7 +178,7 @@ bool NetAsync::checkLookup(NetSocket socket, void* out_h_addr,
       if (socket == (*iter)->sock && (*iter)->complete)
       {
          // copy the lookup data to the callers parameters
-         dMemcpy(out_h_addr, (*iter)->out_h_addr, out_h_addr_size);
+         memcpy(out_h_addr, (*iter)->out_h_addr, out_h_addr_size);
          *out_h_length = (*iter)->out_h_length;
          found = true;
          break;

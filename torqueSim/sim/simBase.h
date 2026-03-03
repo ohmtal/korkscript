@@ -23,12 +23,14 @@
 #ifndef _SIMBASE_H_
 #define _SIMBASE_H_
 
-#ifndef _TVECTOR_H_
-#include "core/tVector.h"
-#endif
+
+#include <vector>
+
 #ifndef _BITSET_H_
 #include "core/bitSet.h"
 #endif
+
+#include "embed/api.h"
 
 #ifndef _CONSOLEOBJECT_H_
 #include "console/consoleObject.h"
@@ -42,7 +44,7 @@
 #endif
 
 #ifndef _PLATFORMSEMAPHORE_H_
-#include "platform/platformSemaphore.h"
+#include "platform/threads/semaphore.h"
 #endif
 
 #include <algorithm>
@@ -97,24 +99,9 @@ typedef U32 SimTime;
 // END TMP T2D BLOCK
 typedef U32 SimObjectId;
 
-// BEGIN T2D BLOCK
-class SimObjectList : public VectorPtr<SimObject*>
-{
-   static bool compareId(const SimObject* a, const SimObject* b);
+using SimObjectList = std::vector<SimObject*>;
 
-public:
-   void pushBack(SimObject*);       ///< Add the SimObject* to the end of the list, unless it's already in the list.
-   void pushBackForce(SimObject*);  ///< Add the SimObject* to the end of the list, moving it there if it's already present in the list.
-   void pushFront(SimObject*);      ///< Add the SimObject* to the start of the list.
-   void remove(SimObject*);         ///< Remove the SimObject* from the list; may disrupt order of the list.
 
-   inline SimObject* at(S32 index) const {  if(index >= 0 && index < size()) return (*this)[index]; return NULL; }
-
-   /// Remove the SimObject* from the list; guaranteed to preserve list order.
-   void removeStable(SimObject* pObject);
-
-   void sortId();                   ///< Sort the list by object ID.
-};
 // END T2D BLOCK
 
 //---------------------------------------------------------------------------
@@ -146,7 +133,7 @@ class SimEvent
                             ///  of addition to the list.
    SimObject *destObject;   ///< Object on which this event will be applied.
 
-   SimEvent() { destObject = NULL; }
+   SimEvent() { destObject = nullptr; }
    virtual ~SimEvent() {}   ///< Destructor
                             ///
                             /// A dummy virtual destructor is required
@@ -161,7 +148,7 @@ class SimEvent
    /// The event is deleted immediately after processing. If the
    /// object referenced in destObject is deleted, then the event
    /// is not called. The even will be executed unconditionally if
-   /// the object referenced is NULL.
+   /// the object referenced is nullptr.
    ///
    /// @param   object  Object stored in destObject.
    virtual void process(SimObject *object)=0;
@@ -178,7 +165,8 @@ class SimConsoleEvent : public SimEvent
 {
 protected:
    S32 mArgc;
-   char **mArgv;
+   KorkApi::ConsoleValue mArgv[KorkApi::MaxArgs];
+   std::vector<U8> mArgData;
    bool mOnObject;
   public:
 
@@ -195,37 +183,71 @@ protected:
    ///
    /// @see Con::execute(S32 argc, const char *argv[])
    /// @see Con::execute(SimObject *object, S32 argc, const char *argv[])
-   SimConsoleEvent(S32 argc, const char **argv, bool onObject);
+   SimConsoleEvent(S32 argc, KorkApi::ConsoleValue* argv, bool onObject);
 
    ~SimConsoleEvent();
    virtual void process(SimObject *object);
 };
 // END T2D BLOCK
 
-// BEGIN T2D BLOCK
-/// Used by Con::threadSafeExecute()
-struct SimConsoleThreadExecCallback
+template <class F>
+class FunctorSimEvent final : public SimEvent
 {
-   void *sem;
-   const char *retVal;
-
-   SimConsoleThreadExecCallback();
-   ~SimConsoleThreadExecCallback();
-
-   void handleCallback(const char *ret);
-   const char *waitForResult();
-};
-
-class SimConsoleThreadExecEvent : public SimConsoleEvent
-{
-   SimConsoleThreadExecCallback *cb;
-
 public:
-   SimConsoleThreadExecEvent(S32 argc, const char **argv, bool onObject, SimConsoleThreadExecCallback *callback);
+  explicit FunctorSimEvent(F&& f) : fn(std::move(f)) {}
+  void process(SimObject* object) override { fn(object); }
 
-   virtual void process(SimObject *object);
+private:
+  F fn;
 };
-// END T2D BLOCK
+
+// helper for type deduction
+template <class F>
+FunctorSimEvent<std::decay_t<F>>* makeFunctorEvent(F&& f)
+{
+  return new FunctorSimEvent<std::decay_t<F>>(std::forward<F>(f));
+}
+
+#ifdef TORQUE_MULTITHREAD
+#include <mutex>
+#include <condition_variable>
+#include <functional>
+
+struct SimEventCompletion
+{
+  std::mutex m;
+  std::condition_variable cv;
+  bool done;
+  
+  void* userData;
+   
+  SimEventCompletion() : done(false), userData(nullptr) {;}
+};
+
+class WaitableLambdaSimEvent final : public SimEvent
+{
+public:
+  using Fn = std::function<void(SimObject*, SimEventCompletion&)>;
+
+  WaitableLambdaSimEvent(Fn fn, std::shared_ptr<SimEventCompletion> c)
+    : mFn(std::move(fn)), comp(std::move(c)) {}
+
+  void process(SimObject* object) override
+  {
+    mFn(object, *comp);
+    {
+      std::lock_guard<std::mutex> lk(comp->m);
+      comp->done = true;
+    }
+    comp->cv.notify_all();
+  }
+
+private:
+  Fn mFn;
+  std::shared_ptr<SimEventCompletion> comp;
+};
+
+#endif
 
 // BEGIN T2D BLOCK
 //---------------------------------------------------------------------------
@@ -241,6 +263,7 @@ class SimFieldDictionary
    {
       StringTableEntry slotName;
       char *value;
+      S32 enforcedTypeId;
       Entry *next;
    };
    enum
@@ -264,8 +287,8 @@ public:
 
    SimFieldDictionary();
    ~SimFieldDictionary();
-   void setFieldValue(StringTableEntry slotName, const char *value);
-   const char *getFieldValue(StringTableEntry slotName);
+   void setFieldValue(StringTableEntry slotName, const char *value, U32 typeId=0);
+   const char *getFieldValue(StringTableEntry slotName, U32* typeId = 0);
    void writeFields(SimObject *obj, Stream &strem, U32 tabStop);
    void printFields(SimObject *obj);
    void assignFrom(SimFieldDictionary *dict);
@@ -286,7 +309,7 @@ class SimFieldDictionaryIterator
    SimFieldDictionary::Entry* operator*();
    void toVMItr(KorkApi::VMIterator& itr);
    inline SimFieldDictionary::Entry* getEntry() const { return mEntry; }
-   inline bool isValid() const { return mEntry != NULL; }
+   inline bool isValid() const { return mEntry != nullptr; }
 };
 
 // END T2D BLOCK
@@ -467,7 +490,7 @@ class SimFieldDictionaryIterator
 /// The functions to get/set these fields are very straightforward:
 ///
 /// @code
-///  setDataField(StringTable->insert("locked", false), NULL, b ? "true" : "false" );
+///  setDataField(StringTable->insert("locked", false), nullptr, b ? "true" : "false" );
 ///  curObject->setDataField(curField, curFieldArray, STR.getStringValue());
 ///  setDataField(slotName, array, value);
 /// @endcode
@@ -563,7 +586,7 @@ private:
     Notify*     mNotifyList;
     /// @}
 
-    Vector<StringTableEntry> mFieldFilter;
+    std::vector<StringTableEntry> mFieldFilter;
 
 protected:
     SimObjectId mId;         ///< Id number for this object.
@@ -598,11 +621,17 @@ protected:
     static bool setClass(void* obj, const char* data)                                { static_cast<SimObject*>(obj)->setClassNamespace(data); return false; };
     static bool setSuperClass(void* obj, const char* data)                           { static_cast<SimObject*>(obj)->setSuperClassNamespace(data); return false; };
     static bool writeCanSaveDynamicFields( void* obj, StringTableEntry pFieldName )  { return static_cast<SimObject*>(obj)->mCanSaveFieldDictionary == false; }
-    static bool writeInternalName( void* obj, StringTableEntry pFieldName )          { SimObject* simObject = static_cast<SimObject*>(obj); return simObject->mInternalName != NULL && simObject->mInternalName != StringTable->EmptyString; }
-    static bool setParentGroup(void* obj, const char* data);
-    static bool writeParentGroup( void* obj, StringTableEntry pFieldName )           { return static_cast<SimObject*>(obj)->mGroup != NULL; }
-    static bool writeSuperclass( void* obj, StringTableEntry pFieldName )            { SimObject* simObject = static_cast<SimObject*>(obj); return simObject->mSuperClassName != NULL && simObject->mSuperClassName != StringTable->EmptyString; }
-    static bool writeClass( void* obj, StringTableEntry pFieldName )                 { SimObject* simObject = static_cast<SimObject*>(obj); return simObject->mClassName != NULL && simObject->mClassName != StringTable->EmptyString; }
+    static bool writeInternalName( void* obj, StringTableEntry pFieldName )          { SimObject* simObject = static_cast<SimObject*>(obj); return simObject->mInternalName != nullptr && simObject->mInternalName != StringTable->EmptyString; }
+    static bool setParentGroup(void* userPtr,
+                               KorkApi::Vm* vm,
+                               KorkApi::TypeStorageInterface* inputStorage,
+                               KorkApi::TypeStorageInterface* outputStorage,
+                               void* fieldUserPtr,
+                               BitSet32 flag,
+                               U32 requestedType);
+    static bool writeParentGroup( void* obj, StringTableEntry pFieldName )           { return static_cast<SimObject*>(obj)->mGroup != nullptr; }
+    static bool writeSuperclass( void* obj, StringTableEntry pFieldName )            { SimObject* simObject = static_cast<SimObject*>(obj); return simObject->mSuperClassName != nullptr && simObject->mSuperClassName != StringTable->EmptyString; }
+    static bool writeClass( void* obj, StringTableEntry pFieldName )                 { SimObject* simObject = static_cast<SimObject*>(obj); return simObject->mClassName != nullptr && simObject->mClassName != StringTable->EmptyString; }
 
     // Accessors
     public:
@@ -646,9 +675,9 @@ public:
     ///
     /// @param   slotName    Field to access.
     /// @param   array       String containing index into array
-    ///                      (if field is an array); if NULL, it is ignored.
+    ///                      (if field is an array); if nullptr, it is ignored.
     const char *getDataField(StringTableEntry slotName, const char *array);
-    const char *getDataFieldDynamic(StringTableEntry slotName, const char *array);
+    const char *getDataFieldDynamic(StringTableEntry slotName, const char *array, U32* outTypeId = nullptr);
 
     /// Set the value of a field on the object.
     ///
@@ -656,26 +685,16 @@ public:
     /// function does.
     ///
     /// @param   slotName    Field to access.
-    /// @param   array       String containing index into array; if NULL, it is ignored.
+    /// @param   array       String containing index into array; if nullptr, it is ignored.
     /// @param   value       Value to store.
     void setDataField(StringTableEntry slotName, const char *array, const char *value);
-    void setDataFieldDynamic(StringTableEntry slotName, const char *array, const char *value);
-
-    const char *getPrefixedDataField(StringTableEntry fieldName, const char *array);
-
-    void setPrefixedDataField(StringTableEntry fieldName, const char *array, const char *value);
-
-    const char *getPrefixedDynamicDataField(StringTableEntry fieldName, const char *array, const S32 fieldType = -1);
-
-    void setPrefixedDynamicDataField(StringTableEntry fieldName, const char *array, const char *value, const S32 fieldType = -1);
-
-    StringTableEntry getDataFieldPrefix( StringTableEntry fieldName );
+    void setDataFieldDynamic(StringTableEntry slotName, const char *array, const char *value, U32 typeId);
 
     /// Get the type of a field on the object.
     ///
     /// @param   slotName    Field to access.
     /// @param   array       String containing index into array
-    ///                      (if field is an array); if NULL, it is ignored.
+    ///                      (if field is an array); if nullptr, it is ignored.
     U32 getDataFieldType(StringTableEntry slotName, const char *array);
 
     /// Get reference to the dictionary containing dynamic fields.
@@ -687,7 +706,7 @@ public:
     SimFieldDictionary * getFieldDictionary() {return(mFieldDictionary);}
 
     /// Clear all dynamic fields.
-    inline void clearDynamicFields( void ) { if ( mFieldDictionary != NULL ) { delete mFieldDictionary; mFieldDictionary = new SimFieldDictionary; } }
+    inline void clearDynamicFields( void ) { if ( mFieldDictionary != nullptr ) { delete mFieldDictionary; mFieldDictionary = new SimFieldDictionary; } }
 
     /// Set whether fields created at runtime should be saved. Default is true.
     void    setCanSaveDynamicFields(bool bCanSave){ mCanSaveFieldDictionary   =  bCanSave;}
@@ -707,6 +726,9 @@ public:
 
     /// Check if a method exists in the objects current namespace.
     virtual bool isMethod( const char* methodName );
+   
+   /// Get defined namespace of a method
+    StringTableEntry getMethodNamespace( const char* methodName );
     /// @}
 
     /// @name Initialization
@@ -727,7 +749,7 @@ public:
     virtual void onGroupAdd();                           ///< Called when the object is added to a SimGroup.
     virtual void onGroupRemove();                        ///< Called when the object is removed from a SimGroup.
     virtual void onNameChange(const char *name);         ///< Called when the object's name is changed.
-    virtual void onStaticModified(const char* slotName, const char*newValue = NULL); ///< Called when a static field is modified.
+    virtual void onStaticModified(const char* slotName, const char*newValue = nullptr); ///< Called when a static field is modified.
                                                         ///
                                                         ///  Specifically, this is called by setDataField
                                                         ///  when a static field is modified, see
@@ -766,7 +788,7 @@ public:
     ///
     /// This is subclassed in the SimGroup and SimSet classes.
     ///
-    /// For a single object, it just returns NULL, as normal objects cannot have children.
+    /// For a single object, it just returns nullptr, as normal objects cannot have children.
     virtual SimObject *findObject(const char *name);
 
     /// @name Notification
@@ -821,7 +843,7 @@ public:
     ///
     /// If a subclass's onAdd doesn't eventually call SimObject::onAdd(), it will
     /// cause an assertion.
-    bool registerObject(KorkApi::Vm* vm = NULL, KorkApi::VMObject* evalObject=NULL);
+    bool registerObject(KorkApi::Vm* vm = nullptr, KorkApi::VMObject* evalObject=nullptr);
 
     /// Register the object, forcing the id.
     ///
@@ -994,11 +1016,11 @@ public:
     virtual void        dumpClassHierarchy();
 
     static void initPersistFields();
-    static void registerClassNameFields();
+    static void registerClassNameFields(bool includeSuper);
     SimObject* clone( const bool copyDynamicFields );
     virtual void copyTo(SimObject* object);
 
-    template<typename T> bool isType(void) { return dynamic_cast<T>(this) != NULL; }
+    template<typename T> bool isType(void) { return dynamic_cast<T>(this) != nullptr; }
 
     // Component Console Overrides
     virtual bool handlesConsoleMethod(const char * fname, S32 * routingId) { return false; }
@@ -1199,7 +1221,7 @@ public:
    bool onAdd();
    //virtual void onRemove(); T2DJUNK not in T3D or impl in T2D
    
-   virtual void onStaticModified(const char* slotName, const char*newValue = NULL);
+   virtual void onStaticModified(const char* slotName, const char*newValue = nullptr);
    //void setLastError(const char*);
    void assignId();
 
@@ -1270,13 +1292,13 @@ public:
    inline operator T*() const
    {
       AssertFatal(isResolved(), "Trying to resolve unresolved object ptr");
-      return isResolved() ? mDataBlock : NULL;
+      return isResolved() ? mDataBlock : nullptr;
    }
    
    inline T* operator->() const
    {
       AssertFatal(isResolved(), "Trying to resolve unresolved object ptr");
-      return isResolved() ? mDataBlock : NULL;
+      return isResolved() ? mDataBlock : nullptr;
    }
    
    inline bool isResolved() const
@@ -1353,8 +1375,6 @@ protected:
 
 public:
    SimSet() {
-      VECTOR_SET_ASSOCIATION(objectList);
-
       mMutex = Mutex::createMutex();
    }
 
@@ -1363,7 +1383,7 @@ public:
       lock();
       unlock();
       Mutex::destroyMutex(mMutex);
-      mMutex = NULL;
+      mMutex = nullptr;
    }
 
    /// @name STL Interface
@@ -1373,10 +1393,10 @@ public:
    typedef SimObjectList::iterator iterator;
    typedef SimObjectList::value_type value;
    SimObject* front() { return objectList.front(); }
-   SimObject* first() { return objectList.first(); }
-   SimObject* last()  { return objectList.last(); }
+   SimObject* first() { return objectList.front(); }
+   SimObject* last()  { return objectList.back(); }
    bool       empty() { return objectList.empty();   }
-   S32        size() const  { return objectList.size(); }
+   S32        size() const  { return (S32)objectList.size(); }
    iterator   begin() { return objectList.begin(); }
    iterator   end()   { return objectList.end(); }
    value operator[] (S32 index) { return objectList[U32(index)]; }
@@ -1388,7 +1408,7 @@ public:
    {
        for( iterator itr = begin(); itr != end(); ++itr )
        {
-           if ( dynamic_cast<T*>(*itr) != NULL )
+           if ( dynamic_cast<T*>(*itr) != nullptr )
                return true;
        }
 
@@ -1420,11 +1440,11 @@ public:
    virtual void popObject();                ///< Remove an object from the end of the list.
 
    void bringObjectToFront(SimObject* obj) { reOrder(obj, front()); }
-   void pushObjectToBack(SimObject* obj) { reOrder(obj, NULL); }
+   void pushObjectToBack(SimObject* obj) { reOrder(obj, nullptr); }
 
    /// @}
 
-   void callOnChildren( const char * method, S32 argc, const char *argv[], bool executeOnChildGroups = true );
+   void callOnChildren( const char * method, S32 argc, KorkApi::ConsoleValue argv[], bool executeOnChildGroups = true );
 
    virtual void write(Stream &stream, U32 tabStop, U32 flags = 0);
 
@@ -1475,17 +1495,14 @@ protected:
       SimSet* set;
       SimSet::iterator itr;
    };
-   class Stack: public Vector<Entry> {
-   public:
-      void push_back(SimSet*);
-   };
-   Stack stack;
+   std::vector<Entry> stack;
+   void push_back_stack(SimSet*);
 
 public:
    SimSetIterator(SimSet*);
    SimObject* operator++();
    SimObject* operator*() {
-      return stack.empty()? 0: *stack.last().itr;
+      return stack.empty()? 0: *stack.back().itr;
    }
 };
 
@@ -1600,15 +1617,22 @@ namespace Sim
 
    SimObject* findObject(SimObjectId);
    SimObject* findObject(const char* name);
+   SimObject* findObject(KorkApi::ConsoleValue cv);
+
    template<class T> inline bool findObject(SimObjectId id,T*&t)
    {
       t = dynamic_cast<T*>(findObject(id));
-      return t != NULL;
+      return t != nullptr;
    }
    template<class T> inline bool findObject(const char* pObjectName,T*&t)
    {
       t = dynamic_cast<T*>(findObject(pObjectName));
-      return t != NULL;
+      return t != nullptr;
+   }
+   template<class T> inline bool findObject(KorkApi::ConsoleValue cv,T*&t)
+   {
+      t = dynamic_cast<T*>(findObject(cv));
+      return t != nullptr;
    }
    template<class T> inline T* findObject(SimObjectId id)
    {
@@ -1669,7 +1693,7 @@ namespace Sim
    ConsoleSetType( Type##T##Ptr ) \
    {                                                                                                 \
       if (argc == 1) {                                                                               \
-         *reinterpret_cast<T**>(dptr) = NULL;                                                        \
+         *reinterpret_cast<T**>(dptr) = nullptr;                                                        \
          if (argv[0] && argv[0][0] && !Sim::findObject(argv[0],*reinterpret_cast<T**>(dptr)))        \
             Con::printf("Object '%s' is not a member of the '%s' data block class", argv[0], #T);    \
       }                                                                                              \
@@ -1697,7 +1721,7 @@ template<class T> inline bool SimNetDataBlockRef<T>::resolve()
    UINTPTR realId = mId >> 1;
    if (realId == 0)
    {
-      mDataBlock = NULL;
+      mDataBlock = nullptr;
       return true;
    }
    
@@ -1705,6 +1729,11 @@ template<class T> inline bool SimNetDataBlockRef<T>::resolve()
    
    AssertFatal((mId & 0x1) == 0, "Misaligned pointer situation");
    return found;
+}
+
+inline bool SortSimObjectList(const SimObject* a, const SimObject* b)
+{
+    return a->getId() < b->getId();
 }
 
 #endif

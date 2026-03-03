@@ -21,15 +21,11 @@
 //-----------------------------------------------------------------------------
 
 #include "platform/platform.h"
-#include "core/stringTable.h"
 #include "embed/api.h"
 #include "embed/internalApi.h"
 #include "console/consoleInternal.h"
 #include "console/consoleNamespace.h"
-#include "console/simpleLexer.h"
-#include "console/ast.h"
 #include "console/compiler.h"
-#include "core/tempAlloc.h"
 #include "console/telnetDebugger.h"
 
 
@@ -110,14 +106,14 @@ TelnetDebugger::TelnetDebugger(KorkApi::VmInternal* vm)
    mVMInternal->mConfig.extraConsumers[1].cbFunc = debuggerConsumer;
    mVMInternal->mConfig.extraConsumers[1].cbUser = this;
    mVMInternal = vm;
-   mCurrentWatchFiber = NULL;
+   mCurrentWatchFiber = nullptr;
    
    mAcceptPort = -1;
    
    mState = NotConnected;
    mCurPos = 0;
    
-   mBreakpoints = NULL;
+   mBreakpoints = nullptr;
    mBreakOnNextStatement = false;
    mProgramPaused = false;
    mWaitForClient = false;
@@ -129,31 +125,33 @@ TelnetDebugger::TelnetDebugger(KorkApi::VmInternal* vm)
    // "enhanced" debugger features.
    char buf[32];
    snprintf(buf, 32, "$dbgVersion = %d;", Version );
-   mVMInternal->mVM->evalCode(buf, "");
+   mVMInternal->mVM->evalCode(buf, "", "");
 }
 
 TelnetDebugger::Breakpoint **TelnetDebugger::findBreakpoint(StringTableEntry fileName, S32 lineNumber)
 {
    Breakpoint **walk = &mBreakpoints;
    Breakpoint *cur;
-   while((cur = *walk) != NULL)
+   while((cur = *walk) != nullptr)
    {
       // TODO: This assumes that the OS file names are case
       // insensitive... Torque needs a dFilenameCmp() function.
-      if( dStricmp( cur->fileName, fileName ) == 0 && cur->lineNumber == U32(lineNumber))
+      if( strcasecmp( cur->fileName, fileName ) == 0 && cur->lineNumber == U32(lineNumber))
          return walk;
       walk = &cur->next;
    }
-   return NULL;
+   return nullptr;
 }
 
 
 TelnetDebugger::~TelnetDebugger()
 {
+   removeAllBreakpoints();
+   
    if (mVMInternal->mConfig.extraConsumers[1].cbUser == this)
    {
-      mVMInternal->mConfig.extraConsumers[1].cbFunc = NULL;
-      mVMInternal->mConfig.extraConsumers[1].cbUser = NULL;
+      mVMInternal->mConfig.extraConsumers[1].cbFunc = nullptr;
+      mVMInternal->mConfig.extraConsumers[1].cbUser = nullptr;
    }
 
    if (mValid)
@@ -166,7 +164,7 @@ void TelnetDebugger::send(const char *str)
 {
    if (mDebugSocket != 0)
    {
-      mVMInternal->mConfig.iTelnet.SendDataFn(mVMInternal->mConfig.telnetUser, mDebugSocket, dStrlen(str), (const unsigned char*)str);
+      mVMInternal->mConfig.iTelnet.SendDataFn(mVMInternal->mConfig.telnetUser, mDebugSocket, strlen(str), (const unsigned char*)str);
    }
 }
 
@@ -195,7 +193,7 @@ void TelnetDebugger::setDebugParameters(S32 port, const char *password, bool wai
       mAcceptPort = -1;
    }
 
-   dStrncpy(mDebuggerPassword, password, PasswordMaxLength);
+   strncpy(mDebuggerPassword, password, PasswordMaxLength);
    
    mWaitForClient = waitForClient;
    if ( !mWaitForClient )
@@ -204,7 +202,7 @@ void TelnetDebugger::setDebugParameters(S32 port, const char *password, bool wai
    // Wait for the client to fully connect.
    while ( mState != Connected  )
    {
-      Platform::sleep(10);
+      mVMInternal->mConfig.iTelnet.YieldExecFn(mVMInternal->mConfig.telnetUser);
       process();
    }
    
@@ -273,7 +271,7 @@ void TelnetDebugger::checkDebugRecv()
          while ( mCurPos > 0 && ( mLineBuffer[0] == 0 || mLineBuffer[0] == '\r' || mLineBuffer[0] == '\n' ) )
          {
             mCurPos--;
-            dMemmove(mLineBuffer, mLineBuffer + 1, mCurPos);
+            memmove(mLineBuffer, mLineBuffer + 1, mCurPos);
          }
          
          // Look for a complete command.
@@ -291,7 +289,7 @@ void TelnetDebugger::checkDebugRecv()
                
                // Remove the command from the buffer.
                mCurPos -= i + 1;
-               dMemmove(mLineBuffer, mLineBuffer + i + 1, mCurPos);
+               memmove(mLineBuffer, mLineBuffer + i + 1, mCurPos);
                
                gotCmd = true;
                break;
@@ -346,8 +344,8 @@ void TelnetDebugger::executionStopped(CodeBlock *code, U32 lineNumber)
    mProgramPaused = true;
 
    char buf[256];
-   snprintf(buf, 256, "$Debug::result = %s;", brk->testExpression);
-   mVMInternal->mVM->evalCode(buf, "");
+   snprintf(buf, 256, "$Debug::result = %s;", brk->testExpression.c_str());
+   mVMInternal->mVM->evalCode(buf, "", "");
 
    KorkApi::ConsoleValue cv = mVMInternal->mVM->getGlobalVariable("$Debug::result");
 
@@ -408,7 +406,7 @@ void TelnetDebugger::breakProcess()
    mProgramPaused = true;
    while (mProgramPaused)
    {
-      Platform::sleep(10);
+      mVMInternal->mConfig.iTelnet.YieldExecFn(mVMInternal->mConfig.telnetUser);
       checkDebugRecv();
       if(mDebugSocket == 0)
       {
@@ -444,25 +442,25 @@ void TelnetDebugger::sendBreak()
          if ( ns ) {
             
             if ( ns->mParent && ns->mParent->mPackage && ns->mParent->mPackage[0] ) {
-               dStrcat( scope, ns->mParent->mPackage );
-               dStrcat( scope, "::" );
+               strcat( scope, ns->mParent->mPackage );
+               strcat( scope, "::" );
             }
             if ( ns->mName && ns->mName[0] ) {
-               dStrcat( scope, ns->mName );
-               dStrcat( scope, "::" );
+               strcat( scope, ns->mName );
+               strcat( scope, "::" );
             }
          }
          
          const char *function = frameInfo.scopeName;
          if ((!function) || (!function[0]))
             function = "<none>";
-         dStrcat( scope, function );
+         strcat( scope, function );
          
          U32 line=0, inst;
          U32 ip = frameInfo.ip;
          if (code)
             code->findBreakLine(ip, line, inst);
-         dSprintf(buffer, MaxCommandSize, " %s %d %s", file, line, scope);
+         snprintf(buffer, MaxCommandSize, " %s %d %s", file, line, scope);
          send(buffer);
       }
    }
@@ -477,7 +475,7 @@ void TelnetDebugger::processLineBuffer(S32 cmdLen)
 
    if (mState == PasswordTry)
    {
-      if(dStrncmp(mLineBuffer, mDebuggerPassword, cmdLen-1))
+      if(strncmp(mLineBuffer, mDebuggerPassword, cmdLen-1))
       {
          // failed password:
          send("PASS WrongPassword.\r\n");
@@ -489,7 +487,7 @@ void TelnetDebugger::processLineBuffer(S32 cmdLen)
          mState = mWaitForClient ? Initialize : Connected;
       }
       
-      mCurrentWatchFiber = NULL;
+      mCurrentWatchFiber = nullptr;
       setWatchFiberFromVm();
       return;
    }
@@ -503,7 +501,7 @@ void TelnetDebugger::processLineBuffer(S32 cmdLen)
       S32 passCount, line, frame;
       ExprEvalState* existingEvalState = mVMInternal->mCurrentFiberState;
       
-      if(dSscanf(mLineBuffer, "CEVAL %[^\n]", evalBuffer) == 1)
+      if(sscanf(mLineBuffer, "CEVAL %[^\n]", evalBuffer) == 1)
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          if (cfg.iTelnet.QueueEvaluateFn)
@@ -511,84 +509,85 @@ void TelnetDebugger::processLineBuffer(S32 cmdLen)
             tel.QueueEvaluateFn(cfg.telnetUser, evalBuffer);
          }
       }
-      else if(dSscanf(mLineBuffer, "BRKVARSET %s %d %[^\n]", varBuffer, &passCount, evalBuffer) == 3)
+      else if(sscanf(mLineBuffer, "BRKVARSET %s %d %[^\n]", varBuffer, &passCount, evalBuffer) == 3)
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          addVariableBreakpoint(varBuffer, passCount, evalBuffer);
       }
-      else if(dSscanf(mLineBuffer, "BRKVARCLR %s", varBuffer) == 1)
+      else if(sscanf(mLineBuffer, "BRKVARCLR %s", varBuffer) == 1)
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          removeVariableBreakpoint(varBuffer);
       }
-      else if(dSscanf(mLineBuffer, "BRKSET %s %d %s %d %[^\n]", fileBuffer,&line,&clear,&passCount,evalBuffer) == 5)
+      else if(sscanf(mLineBuffer, "BRKSET %s %d %s %d %[^\n]", fileBuffer,&line,&clear,&passCount,evalBuffer) == 5)
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          addBreakpoint(fileBuffer, line, dAtob(clear), passCount, evalBuffer);
       }
-      else if(dSscanf(mLineBuffer, "BRKCLR %s %d", fileBuffer, &line) == 2)
+      else if(sscanf(mLineBuffer, "BRKCLR %s %d", fileBuffer, &line) == 2)
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          removeBreakpoint(fileBuffer, line);
       }
-      else if(!dStrncmp(mLineBuffer, "BRKCLRALL\n", cmdLen))
+      else if(!strncmp(mLineBuffer, "BRKCLRALL\n", cmdLen))
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          removeAllBreakpoints();
       }
-      else if(!dStrncmp(mLineBuffer, "BRKNEXT\n", cmdLen))
+      else if(!strncmp(mLineBuffer, "BRKNEXT\n", cmdLen))
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          debugBreakNext();
       }
-      else if(!dStrncmp(mLineBuffer, "CONTINUE\n", cmdLen))
+      else if(!strncmp(mLineBuffer, "CONTINUE\n", cmdLen))
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          debugContinue();
       }
-      else if(!dStrncmp(mLineBuffer, "STEPIN\n", cmdLen))
+      else if(!strncmp(mLineBuffer, "STEPIN\n", cmdLen))
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          debugStepIn();
       }
-      else if(!dStrncmp(mLineBuffer, "STEPOVER\n", cmdLen))
+      else if(!strncmp(mLineBuffer, "STEPOVER\n", cmdLen))
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          debugStepOver();
       }
-      else if(!dStrncmp(mLineBuffer, "STEPOUT\n", cmdLen))
+      else if(!strncmp(mLineBuffer, "STEPOUT\n", cmdLen))
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          debugStepOut();
       }
-      else if(dSscanf(mLineBuffer, "EVAL %s %d %[^\n]", varBuffer, &frame, evalBuffer) == 3)
+      else if(sscanf(mLineBuffer, "EVAL %s %d %[^\n]", varBuffer, &frame, evalBuffer) == 3)
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          evaluateExpression(varBuffer, frame, evalBuffer);
       }
-      else if(!dStrncmp(mLineBuffer, "FILELIST\n", cmdLen))
+      else if(!strncmp(mLineBuffer, "FILELIST\n", cmdLen))
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          dumpFileList();
       }
-      else if(dSscanf(mLineBuffer, "BREAKLIST %s", fileBuffer) == 1)
+      else if(sscanf(mLineBuffer, "BREAKLIST %s", fileBuffer) == 1)
       {
          mVMInternal->mCurrentFiberState = mCurrentWatchFiber;
          dumpBreakableList(fileBuffer);
       }
-      else if(dSscanf(mLineBuffer, "SETFIBER %u", setFiberId) == 1)
+      else if(sscanf(mLineBuffer, "SETFIBER %u", setFiberId) == 1)
       {
          mVMInternal->setCurrentFiber(setFiberId);
          setWatchFiberFromVm();
       }
       else
       {
-         S32 errorLen = dStrlen(mLineBuffer) + 32; // ~25 in error message, plus buffer
-         TempAlloc<char> errorBuffer(errorLen);
+         S32 errorLen = strlen(mLineBuffer) + 32; // ~25 in error message, plus buffer
+         KorkApi::Vector<char> errorBuffer(errorLen);
+         char* usageStr = errorBuffer.data();
          
-         dSprintf( errorBuffer, errorLen, "DBGERR Invalid command(%s)!\r\n", mLineBuffer );
+         snprintf( errorBuffer.data(), errorLen, "DBGERR Invalid command(%s)!\r\n", mLineBuffer );
          // invalid stuff.
-         send( errorBuffer );
+         send( errorBuffer.data() );
       }
 
       if (mVMInternal->mCurrentFiberState != existingEvalState)
@@ -615,11 +614,11 @@ void TelnetDebugger::addAllBreakpoints(CodeBlock *code)
    
    // Find the breakpoints for this code block and attach them.
    Breakpoint *cur = mBreakpoints;
-   while( cur != NULL )
+   while( cur != nullptr )
    {
       // TODO: This assumes that the OS file names are case
       // insensitive... Torque needs a dFilenameCmp() function.
-      if( dStricmp( cur->fileName, code->name ) == 0 )
+      if( strcasecmp( cur->fileName, code->name ) == 0 )
       {
          cur->code = code;
          
@@ -629,7 +628,7 @@ void TelnetDebugger::addAllBreakpoints(CodeBlock *code)
          if (newLine <= 0)
          {
             char buffer[MaxCommandSize];
-            dSprintf(buffer, MaxCommandSize, "BRKCLR %s %d\r\n", cur->fileName, cur->lineNumber);
+            snprintf(buffer, MaxCommandSize, "BRKCLR %s %d\r\n", cur->fileName, cur->lineNumber);
             send(buffer);
             
             Breakpoint *next = cur->next;
@@ -650,7 +649,7 @@ void TelnetDebugger::addAllBreakpoints(CodeBlock *code)
             // tell the client to clear the breakpoint.
             if ( findBreakpoint(cur->fileName, newLine) ) {
                
-               dSprintf(buffer, MaxCommandSize, "BRKCLR %s %d\r\n", cur->fileName, cur->lineNumber);
+               snprintf(buffer, MaxCommandSize, "BRKCLR %s %d\r\n", cur->fileName, cur->lineNumber);
                send(buffer);
                
                Breakpoint *next = cur->next;
@@ -662,7 +661,7 @@ void TelnetDebugger::addAllBreakpoints(CodeBlock *code)
             
             // We're moving the breakpoint to new line... inform the
             // client so it can update it's view.
-            dSprintf(buffer, MaxCommandSize, "BRKMOV %s %d %d\r\n", cur->fileName, cur->lineNumber, newLine);
+            snprintf(buffer, MaxCommandSize, "BRKMOV %s %d %d\r\n", cur->fileName, cur->lineNumber, newLine);
             send(buffer);
             cur->lineNumber = newLine;
          }
@@ -680,15 +679,14 @@ void TelnetDebugger::addAllBreakpoints(CodeBlock *code)
 
 void TelnetDebugger::addBreakpoint(const char *fileName, S32 line, bool clear, S32 passCount, const char *evalString)
 {
-   fileName = StringTable->insert(fileName);
+   fileName = mVMInternal->internString(fileName, false);
    Breakpoint **bp = findBreakpoint(fileName, line);
    
    if(bp)
    {
       // trying to add the same breakpoint...
       Breakpoint *brk = *bp;
-      dFree(brk->testExpression);
-      brk->testExpression = dStrdup(evalString);
+      brk->testExpression = evalString;
       brk->passCount = passCount;
       brk->clearOnHit = clear;
       brk->curCount = 0;
@@ -706,7 +704,7 @@ void TelnetDebugger::addBreakpoint(const char *fileName, S32 line, bool clear, S
          if (newLine <= 0)
          {
             char buffer[MaxCommandSize];
-            dSprintf(buffer, MaxCommandSize, "BRKCLR %s %d\r\n", fileName, line);
+            snprintf(buffer, MaxCommandSize, "BRKCLR %s %d\r\n", fileName, line);
             send(buffer);
             return;
          }
@@ -721,13 +719,13 @@ void TelnetDebugger::addBreakpoint(const char *fileName, S32 line, bool clear, S
             // If we already have a line at this breapoint then
             // tell the client to clear the breakpoint.
             if ( findBreakpoint(fileName, newLine) ) {
-               dSprintf(buffer, MaxCommandSize, "BRKCLR %s %d\r\n", fileName, line);
+               snprintf(buffer, MaxCommandSize, "BRKCLR %s %d\r\n", fileName, line);
                send(buffer);
                return;
             }
             
             // We're moving the breakpoint to new line... inform the client.
-            dSprintf(buffer, MaxCommandSize, "BRKMOV %s %d %d\r\n", fileName, line, newLine);
+            snprintf(buffer, MaxCommandSize, "BRKMOV %s %d %d\r\n", fileName, line, newLine);
             send(buffer);
             line = newLine;
          }
@@ -735,14 +733,14 @@ void TelnetDebugger::addBreakpoint(const char *fileName, S32 line, bool clear, S
          code->setBreakpoint(line);
       }
       
-      Breakpoint *brk = new Breakpoint;
+      Breakpoint *brk = mVMInternal->New<Breakpoint>();
       brk->code = code;
       brk->fileName = fileName;
       brk->lineNumber = line;
       brk->passCount = passCount;
       brk->clearOnHit = clear;
       brk->curCount = 0;
-      brk->testExpression = dStrdup(evalString);
+      brk->testExpression = evalString;
       brk->next = mBreakpoints;
       mBreakpoints = brk;
    }
@@ -752,11 +750,10 @@ void TelnetDebugger::removeBreakpointsFromCode(CodeBlock *code)
 {
    Breakpoint **walk = &mBreakpoints;
    Breakpoint *cur;
-   while((cur = *walk) != NULL)
+   while((cur = *walk) != nullptr)
    {
       if(cur->code == code)
       {
-         dFree(cur->testExpression);
          *walk = cur->next;
          delete walk;
       }
@@ -767,7 +764,7 @@ void TelnetDebugger::removeBreakpointsFromCode(CodeBlock *code)
 
 void TelnetDebugger::removeBreakpoint(const char *fileName, S32 line)
 {
-   fileName = StringTable->insert(fileName);
+   fileName = mVMInternal->internString(fileName, false);
    Breakpoint **bp = findBreakpoint(fileName, line);
    if(bp)
    {
@@ -775,7 +772,6 @@ void TelnetDebugger::removeBreakpoint(const char *fileName, S32 line)
       *bp = brk->next;
       if ( brk->code )
          brk->code->clearBreakpoint(brk->lineNumber);
-      dFree(brk->testExpression);
       delete brk;
    }
 }
@@ -787,12 +783,13 @@ void TelnetDebugger::removeAllBreakpoints()
    {
       Breakpoint *temp = walk->next;
       if ( walk->code )
+      {
          walk->code->clearBreakpoint(walk->lineNumber);
-      dFree(walk->testExpression);
+      }
       delete walk;
       walk = temp;
    }
-   mBreakpoints = NULL;
+   mBreakpoints = nullptr;
 }
 
 void TelnetDebugger::debugContinue()
@@ -910,20 +907,20 @@ void TelnetDebugger::evaluateExpression(const char *tag, S32 frame, const char *
    
    // Build a buffer just big enough for this eval.
    const char* format = "return %s;";
-   dsize_t len = dStrlen( format ) + dStrlen( evalBuffer );
-   char* buffer = new char[ len ];
-   dSprintf( buffer, len, format, evalBuffer );
+   dsize_t len = strlen( format ) + strlen( evalBuffer );
+   char* buffer = mVMInternal->NewArray<char>(len);
+   snprintf( buffer, len, format, evalBuffer );
    
    // Execute the eval.
-   KorkApi::ConsoleValue res = mVMInternal->mVM->evalCode(evalBuffer, NULL, frame);
+   KorkApi::ConsoleValue res = mVMInternal->mVM->evalCode(evalBuffer, nullptr, nullptr, frame);
    const char* result = mVMInternal->valueAsString(res);
    delete [] buffer;
    
    // Create a new buffer that fits the result.
    format = "EVALOUT %s %s\r\n";
-   len = dStrlen( format ) + dStrlen( tag ) + dStrlen( result );
-   buffer = new char[ len ];
-   dSprintf( buffer, len, format, tag, result[0] ? result : "\"\"" );
+   len = strlen( format ) + strlen( tag ) + strlen( result );
+   buffer = mVMInternal->NewArray<char>(len);
+   snprintf( buffer, len, format, tag, result[0] ? result : "\"\"" );
    
    send( buffer );
    delete [] buffer;
@@ -944,7 +941,7 @@ void TelnetDebugger::enumerateFibers()
    mVMInternal->mFiberStates.forEach([this](ExprEvalState* state){
       char buffer[MaxCommandSize];
       U32 fiberId = mVMInternal->mFiberStates.getHandleValue(state);
-      dSprintf(buffer, sizeof(buffer), "F %u %s", fiberId, KorkApi::FiberRunResult::stateAsString(state->mState));
+      snprintf(buffer, sizeof(buffer), "F %u %s", fiberId, KorkApi::FiberRunResult::stateAsString(state->mState));
       send(buffer);
    });
    // TODO
@@ -964,16 +961,16 @@ void TelnetDebugger::dumpFileList()
 
 void TelnetDebugger::dumpBreakableList(const char *fileName)
 {
-   fileName = StringTable->insert(fileName);
+   fileName = mVMInternal->internString(fileName, false);
    CodeBlock *file = mVMInternal->findCodeBlock(fileName);
    char buffer[MaxCommandSize];
    if(file)
    {
-      dSprintf(buffer, MaxCommandSize, "BREAKLISTOUT %s %d", fileName, file->breakListSize >> 1);
+      snprintf(buffer, MaxCommandSize, "BREAKLISTOUT %s %d", fileName, file->breakListSize >> 1);
       send(buffer);
       for(U32 i = 0; i < file->breakListSize; i += 2)
       {
-         dSprintf(buffer, MaxCommandSize, " %d %d", file->breakList[i], file->breakList[i+1]);
+         snprintf(buffer, MaxCommandSize, " %d %d", file->breakList[i], file->breakList[i+1]);
          send(buffer);
       }
       send("\r\n");
@@ -987,10 +984,10 @@ void TelnetDebugger::clearCodeBlockPointers(CodeBlock *code)
 {
    Breakpoint **walk = &mBreakpoints;
    Breakpoint *cur;
-   while((cur = *walk) != NULL)
+   while((cur = *walk) != nullptr)
    {
       if(cur->code == code)
-         cur->code = NULL;
+         cur->code = nullptr;
       
       walk = &cur->next;
    }
@@ -1008,7 +1005,7 @@ void TelnetDebugger::onFiberChanged()
       char buffer[MaxCommandSize];
       mCurrentWatchFiber->mStackPopBreakIndex = -1; // reset this
       U32 fiberId = mVMInternal->mFiberStates.getHandleValue(mCurrentWatchFiber);
-      dSprintf(buffer, MaxCommandSize, "FIBER %u", fiberId);
+      snprintf(buffer, MaxCommandSize, "FIBER %u", fiberId);
       send(buffer);
    }
 }

@@ -21,6 +21,7 @@
 //-----------------------------------------------------------------------------
 
 #include "platform/platform.h"
+#include "platform/platformString.h"
 #include "platform/threads/mutex.h"
 #include "sim/simBase.h"
 #include "core/stringTable.h"
@@ -30,6 +31,7 @@
 #include "core/idGenerator.h"
 #include "core/safeDelete.h"
 
+extern KorkApi::Vm* sVM;
 
 //---------------------------------------------------------------------------
 
@@ -55,7 +57,7 @@ void initEventQueue()
    gCurrentTime = 0;
    gTargetTime = 0;
    gEventSequence = 1;
-   gEventQueue = NULL;
+   gEventQueue = nullptr;
    gEventQueueMutex = Mutex::createMutex();
 }
 
@@ -104,12 +106,12 @@ U32 postEvent(SimObject *destObject, SimEvent* event,U32 time)
    SimEvent **walk = &gEventQueue;
    SimEvent *current;
    
-   while((current = *walk) != NULL && (current->time < event->time))
+   while((current = *walk) != nullptr && (current->time < event->time))
       walk = &(current->nextEvent);
    
    // [tom, 6/24/2005] This ensures that SimEvents are dispatched in the same order that they are posted.
    // This is needed to ensure Con::threadSafeExecute() executes script code in the correct order.
-   while((current = *walk) != NULL && (current->time == event->time))
+   while((current = *walk) != nullptr && (current->time == event->time))
       walk = &(current->nextEvent);
    
    event->nextEvent = current;
@@ -137,7 +139,7 @@ void cancelEvent(U32 eventSequence)
    SimEvent **walk = &gEventQueue;
    SimEvent *current;
    
-   while((current = *walk) != NULL)
+   while((current = *walk) != nullptr)
    {
       if(current->sequenceCount == eventSequence)
       {
@@ -160,7 +162,7 @@ void cancelPendingEvents(SimObject *obj)
    SimEvent **walk = &gEventQueue;
    SimEvent *current;
    
-   while((current = *walk) != NULL)
+   while((current = *walk) != nullptr)
    {
       if(current->destObject == obj)
       {
@@ -309,7 +311,7 @@ U32 getTargetTime()
 //---------------------------------------------------------------------------
 //---------------------------------------------------------------------------
 
-SimGroup *gRootGroup = NULL;
+SimGroup *gRootGroup = nullptr;
 SimManagerNameDictionary *gNameDictionary;
 SimIdDictionary *gIdDictionary;
 U32 gNextObjectId;
@@ -341,7 +343,7 @@ SimObject* findObject(const char* name)
 {
    // Play nice with bad code - JDD
    if( !name )
-      return NULL;
+      return nullptr;
 
    SimObject *obj;
    char c = *name;
@@ -360,25 +362,41 @@ SimObject* findObject(const char* name)
          {
             obj = findObject(dAtoi(name));
             if(!obj)
-               return NULL;
+               return nullptr;
             return obj->findObject(temp);
          }
       }
    }
    S32 len;
 
-   //-Mat ensure > 0, instead of just != 0 (prevent running through bogus memory on non-NULL-terminated strings)
+   //-Mat ensure > 0, instead of just != 0 (prevent running through bogus memory on non-nullptr-terminated strings)
    for(len = 0; name[len] > 0 && name[len] != '/'; len++)
       ;
    StringTableEntry stName = StringTable->lookupn(name, len);
    if(!stName)
-      return NULL;
+      return nullptr;
    obj = gNameDictionary->find(stName);
    if(!name[len])
       return obj;
    if(!obj)
-      return NULL;
+      return nullptr;
    return obj->findObject(name + len + 1);
+}
+
+SimObject* findObject(KorkApi::ConsoleValue cv)
+{
+   if (cv.isFloat() || cv.isUnsigned())
+   {
+      return findObject(cv.getInt());
+   }
+   else
+   {
+      const char* str = sVM->valueAsString(cv);
+      if (str && *str)
+      {
+         return findObject(str);
+      }
+   }
 }
 
 SimObject* findObject(SimObjectId id)
@@ -467,11 +485,11 @@ bool SimObject::registerObject(KorkApi::Vm* inVm, KorkApi::VMObject* evalObject)
    Sim::gNameDictionary->insert(this);
    
    // Register this with the VM if not already registered
-   if (evalObject != NULL)
+   if (evalObject != nullptr)
    {
       setupVM(inVm, evalObject);
    }
-   else if (inVm == NULL || vmObject == NULL)
+   else if (inVm == nullptr || vmObject == nullptr)
    {
       inVm = Con::getVM();
       vm = inVm;
@@ -491,7 +509,7 @@ bool SimObject::registerObject(KorkApi::Vm* inVm, KorkApi::VMObject* evalObject)
    AssertFatal(!ret || isProperlyAdded(), "Object did not call SimObject::onAdd()");
    
    if ( isMethod( "onAdd" ) )
-      Con::executef( this, 1, "onAdd" );
+      Con::executef( this, "onAdd" );
    
    return ret;
 }
@@ -504,7 +522,7 @@ void SimObject::unregisterObject()
    AssertISV( getScriptCallbackGuard() == 0, "SimObject::unregisterObject: Object is being unregistered whilst performing a script callback!" );
    
    if ( isMethod( "onRemove" ) )
-      Con::executef( this, 1, "onRemove" );
+      Con::executef( this, "onRemove" );
    
    mSimFlags |= Removed;
    
@@ -531,8 +549,8 @@ void SimObject::unregisterObject()
    if (vm && vmObject)
    {
       vm->decVMRef(vmObject);
-      vm = NULL;
-      vmObject = NULL;
+      vm = nullptr;
+      vmObject = nullptr;
    }
 }
 
@@ -597,14 +615,14 @@ void SimObject::assignName(const char *name)
 #endif
    
    // Is this name already registered?
-   if ( Sim::gNameDictionary->find(name) != NULL )
+   if ( Sim::gNameDictionary->find(name) != nullptr )
    {
       // Yes, so error,
       Con::errorf( "SimObject::assignName() - Attempted to set object to name '%s' but it is already assigned to another object.", name );
       return;
    }
    
-   StringTableEntry newName = NULL;
+   StringTableEntry newName = nullptr;
    if(name[0])
       newName = StringTable->insert(name);
 

@@ -21,17 +21,18 @@
 //-----------------------------------------------------------------------------
 
 #include "platform/platform.h"
+#include "platform/platformString.h"
 #include "sim/simBase.h"
 #include "core/stringTable.h"
 #include "console/console.h"
 #include "core/fileStream.h"
-#include "core/tempAlloc.h"
 #include "core/memStream.h"
 
 #include "console/typeValidators.h"
-#include "console/codeBlock.h"
 #include "console/consoleTypes.h"
 #include "sim/dynamicTypes.h"
+
+#include <string>
 
 extern KorkApi::Vm* sVM;
 
@@ -39,87 +40,13 @@ namespace Sim
 {
    ImplementNamedGroup(ScriptClassGroup)
 
-}   
-
-//---------------------------------------------------------------------------
-
-// BEGIN T2D BLOCK
-
-//-----------------------------------------------------------------------------
-
-void SimObjectList::pushBack(SimObject* obj)
-{
-   if (std::find(begin(),end(),obj) == end())
-      push_back(obj);
-}  
-
-//-----------------------------------------------------------------------------
-
-void SimObjectList::pushBackForce(SimObject* obj)
-{
-   iterator itr = std::find(begin(),end(),obj);
-   if (itr == end())
-   {
-      push_back(obj);
-   }
-   else 
-   {
-      // Move to the back...
-      //
-      SimObject* pBack = *itr;
-      removeStable(pBack);
-      push_back(pBack);
-   }
-}  
-
-//-----------------------------------------------------------------------------
-
-void SimObjectList::pushFront(SimObject* obj)
-{
-   if (std::find(begin(),end(),obj) == end())
-      push_front(obj);
-}  
-
-//-----------------------------------------------------------------------------
-
-void SimObjectList::remove(SimObject* obj)
-{
-   iterator ptr = std::find(begin(),end(),obj);
-   if (ptr != end())
-      erase(ptr);
 }
-
-//-----------------------------------------------------------------------------
-
-void SimObjectList::removeStable(SimObject* obj)
-{
-   iterator ptr = std::find(begin(),end(),obj);
-   if (ptr != end()) 
-      erase(ptr);
-}
-
-//-----------------------------------------------------------------------------
-
-bool SimObjectList::compareId(const SimObject* a, const SimObject* b)
-{
-    return a->getId() < b->getId();
-}
-
-//-----------------------------------------------------------------------------
-
-void SimObjectList::sortId()
-{
-   std::sort(begin(),end(),compareId);
-}
-
-// END T2D BLOCK
-
 
 //---------------------------------------------------------------------------
 //---------------------------------------------------------------------------
 
 // BEGIN T2D BLOCK
-SimFieldDictionary::Entry *SimFieldDictionary::mFreeList = NULL;
+SimFieldDictionary::Entry *SimFieldDictionary::mFreeList = nullptr;
 
 static Chunker<SimFieldDictionary::Entry> fieldChunker;
 
@@ -158,13 +85,13 @@ SimFieldDictionary::~SimFieldDictionary()
          Entry *temp = walk;
          walk = temp->next;
 
-         dFree(temp->value);
+         free(temp->value);
          freeEntry(temp);
       }
    }
 }
 
-void SimFieldDictionary::setFieldValue(StringTableEntry slotName, const char *value)
+void SimFieldDictionary::setFieldValue(StringTableEntry slotName, const char *value, U32 typeId)
 {
    U32 bucket = HashPointer(slotName) % HashTableSize;
    Entry **walk = &mHashTable[bucket];
@@ -172,13 +99,13 @@ void SimFieldDictionary::setFieldValue(StringTableEntry slotName, const char *va
       walk = &((*walk)->next);
 
    Entry *field = *walk;
-   if(!*value)
+   if(!*value && typeId == UINT_MAX)
    {
       if(field)
       {
          mVersion++;
 
-         dFree(field->value);
+         free(field->value);
          *walk = field->next;
          freeEntry(field);
       }
@@ -187,31 +114,50 @@ void SimFieldDictionary::setFieldValue(StringTableEntry slotName, const char *va
    {
       if(field)
       {
-         dFree(field->value);
-         field->value = dStrdup(value);
+         free(field->value);
+         field->value = strdup(value);
+         if (typeId != UINT_MAX)
+         {
+            field->enforcedTypeId = typeId;
+         }
       }
       else
       {
          mVersion++;
 
          field = allocEntry();
-         field->value = dStrdup(value);
+         field->value = strdup(value);
          field->slotName = slotName;
-         field->next = NULL;
+         field->next = nullptr;
+         if (typeId != UINT_MAX)
+         {
+            field->enforcedTypeId = typeId;
+         }
+         else
+         {
+            field->enforcedTypeId = 0;
+         }
          *walk = field;
       }
    }
 }
 
-const char *SimFieldDictionary::getFieldValue(StringTableEntry slotName)
+const char *SimFieldDictionary::getFieldValue(StringTableEntry slotName, U32* typeId)
 {
    U32 bucket = HashPointer(slotName) % HashTableSize;
-
+   
    for(Entry *walk = mHashTable[bucket];walk;walk = walk->next)
+   {
       if(walk->slotName == slotName)
+      {
+         if (typeId)
+         {
+            *typeId = walk->enforcedTypeId;
+         }
          return walk->value;
-
-   return NULL;
+      }
+   }
+   return nullptr;
 }
 
 
@@ -219,27 +165,27 @@ const char *SimFieldDictionary::getFieldValue(StringTableEntry slotName)
 
 SimObject::SimObject( const U8 namespaceLinkMask ) : mNSLinkMask( namespaceLinkMask )
 {
-   objectName               = NULL;
-   mInternalName            = NULL;
+   objectName               = nullptr;
+   mInternalName            = nullptr;
    nextNameObject           = (SimObject*)-1;
    nextManagerNameObject    = (SimObject*)-1;
-   nextIdObject             = NULL;
+   nextIdObject             = nullptr;
    mId                      = 0;
    mIdString                = StringTable->EmptyString;
    mGroup                   = 0;
-   mVMNameSpace             = NULL;
-   mNotifyList              = NULL;
+   mVMNameSpace             = nullptr;
+   mNotifyList              = nullptr;
    mTypeMask                = 0;
    mScriptCallbackGuard     = 0;
-   mFieldDictionary         = NULL;
+   mFieldDictionary         = nullptr;
    mCanSaveFieldDictionary    = true;
-   mClassName               = NULL;
-   mSuperClassName          = NULL;
-   mProgenitorFile          = ""; // TOFIX CodeBlock::getCurrentCodeBlockFullPath();
+   mClassName               = nullptr;
+   mSuperClassName          = nullptr;
+   mProgenitorFile          = Con::getCurrentCodeBlockFullPath();
    mPeriodicTimerID         = 0;
    mSimFlags = 0;
-   vmObject = NULL;
-   vm = NULL;
+   vmObject = nullptr;
+   vm = nullptr;
 }
 
 
@@ -260,9 +206,8 @@ bool compareEntries(const SimFieldDictionary::Entry* fa,
 
 void SimFieldDictionary::writeFields(SimObject *obj, Stream &stream, U32 tabStop)
 {
-
    const AbstractClassRep::FieldList &list = obj->getFieldList();
-   Vector<Entry *> flist(__FILE__, __LINE__);
+   std::vector<Entry *> flist;
 
    for(U32 i = 0; i < HashTableSize; i++)
    {
@@ -277,7 +222,6 @@ void SimFieldDictionary::writeFields(SimObject *obj, Stream &stream, U32 tabStop
          if(i != list.size())
             continue;
 
-
          if (!obj->writeField(walk->slotName, walk->value))
             continue;
 
@@ -289,10 +233,11 @@ void SimFieldDictionary::writeFields(SimObject *obj, Stream &stream, U32 tabStop
    std::sort(flist.begin(),flist.end(),compareEntries);
 
    // Save them out
-   for(Vector<Entry *>::iterator itr = flist.begin(); itr != flist.end(); itr++)
+   for(std::vector<Entry *>::iterator itr = flist.begin(); itr != flist.end(); itr++)
    {
       U32 nBufferSize = (dStrlen( (*itr)->value ) * 2) + dStrlen( (*itr)->slotName ) + 16;
-      TempAlloc<char> expandedBuffer( nBufferSize );
+      std::vector<char> expandedBufferV( nBufferSize );
+      char* expandedBuffer = expandedBufferV.data();
 
       stream.writeTabs(tabStop+1);
 
@@ -308,7 +253,7 @@ void SimFieldDictionary::printFields(SimObject *obj)
 {
    const AbstractClassRep::FieldList &list = obj->getFieldList();
    char expandedBuffer[4096];
-   Vector<Entry *> flist(__FILE__, __LINE__);
+   std::vector<Entry *> flist;
 
    for(U32 i = 0; i < HashTableSize; i++)
    {
@@ -328,7 +273,7 @@ void SimFieldDictionary::printFields(SimObject *obj)
    }
    std::sort(flist.begin(),flist.end(),compareEntries);
 
-   for(Vector<Entry *>::iterator itr = flist.begin(); itr != flist.end(); itr++)
+   for(std::vector<Entry *>::iterator itr = flist.begin(); itr != flist.end(); itr++)
    {
       dSprintf(expandedBuffer, sizeof(expandedBuffer), "  %s = \"", (*itr)->slotName);
       expandEscape(expandedBuffer + dStrlen(expandedBuffer), (*itr)->value);
@@ -412,7 +357,7 @@ void SimObject::assignDynamicFieldsFrom(SimObject* parent)
 {
    if(parent->mFieldDictionary)
    {
-      if( mFieldDictionary == NULL )
+      if( mFieldDictionary == nullptr )
          mFieldDictionary = new SimFieldDictionary;
       mFieldDictionary->assignFrom(parent->mFieldDictionary);
    }
@@ -420,42 +365,7 @@ void SimObject::assignDynamicFieldsFrom(SimObject* parent)
 
 void SimObject::assignFieldsFrom(SimObject *parent)
 {
-#if TOFIX
-   // only allow field assigns from objects of the same class:
-   if(getClassRep() == parent->getClassRep())
-   {
-      const AbstractClassRep::FieldList &list = getFieldList();
-
-      // copy out all the fields:
-      for(U32 i = 0; i < (U32)list.size(); i++)
-      {
-         const AbstractClassRep::Field* f = &list[i];
-         S32 lastField = f->elementCount - 1;
-         for(S32 j = 0; j <= lastField; j++)
-         {
-             const char* fieldVal = (*f->getDataFn)( this,  Con::getData(f->type, (void *) (((const char *)parent) + f->offset), j, f->table, f->flag));
-            //if(fieldVal)
-            //   Con::setData(f->type, (void *) (((const char *)this) + f->offset), j, 1, &fieldVal, f->table);
-            if(fieldVal)
-            {
-               // code copied from SimObject::setDataField().
-               // TODO: paxorr: abstract this into a better setData / getData that considers prot fields.
-               TempAlloc<char> buffer(2048);
-               TempAlloc<char> bufferSecure(2048); // This buffer is used to make a copy of the data 
-               ConsoleBaseType *cbt = ConsoleBaseType::getType( f->type );
-               const char* szBuffer = cbt->prepData( fieldVal, buffer, 2048 );
-               dMemset( bufferSecure, 0, 2048 );
-               dMemcpy( bufferSecure, szBuffer, dStrlen( szBuffer ) );
-
-               if((*f->setDataFn)( this, bufferSecure ) )
-                  Con::setData(f->type, (void *) (((const char *)this) + f->offset), j, 1, &fieldVal, f->table);
-            }
-         }
-      }
-   }
-
-   assignDynamicFieldsFrom(parent);
-#endif
+   getVM()->assignFieldsFromTo(parent->getVMObject(), getVMObject());
 }
 
 bool SimObject::writeField(StringTableEntry fieldname, const char* value)
@@ -474,9 +384,22 @@ bool SimObject::writeField(StringTableEntry fieldname, const char* value)
 
 void SimObject::writeFields(Stream &stream, U32 tabStop)
 {
-#if TOFIX
    const AbstractClassRep::FieldList &list = getFieldList();
+   std::string valCopy;
+   
+   struct EnumKeyUser
+   {
+      std::vector<char> buffer;
+      Stream* s;
+      StringTableEntry fieldName;
+      U32 tabStop;
+   };
 
+   EnumKeyUser userData;
+   userData.s = &stream;
+   userData.tabStop = tabStop;
+   
+   
    for(U32 i = 0; i < (U32)list.size(); i++)
    {
       const AbstractClassRep::Field* f = &list[i];
@@ -487,6 +410,7 @@ void SimObject::writeFields(Stream &stream, U32 tabStop)
 
       // Fetch fieldname.
       StringTableEntry fieldName = StringTable->insert( f->pFieldname );
+      userData.fieldName = fieldName;
 
       // Fetch element count.
       const S32 elementCount = f->elementCount;
@@ -494,54 +418,83 @@ void SimObject::writeFields(Stream &stream, U32 tabStop)
       // Skip if the field should not be written.
       // For now, we only deal with non-array fields.
       if (  elementCount == 1 &&
-            f->writeDataFn != NULL &&
+            f->writeDataFn != nullptr &&
             f->writeDataFn( this, fieldName ) == false )
             continue;
-
-      for(U32 j = 0; S32(j) < elementCount; j++)
+      
+      if (f->enumKeysFn)
       {
-         char array[8];
-         dSprintf( array, 8, "%d", j );
-         const char *val = getDataField(fieldName, array );
-
-         // Make a copy for the field check.
-         if (!val)
-            continue;
-
-         U32 nBufferSize = dStrlen( val ) + 1;
-         TempAlloc<char> valCopy( nBufferSize );
-         dStrcpy( (char *)valCopy, val );
-
-         if (!writeField(fieldName, valCopy))
-            continue;
-
-         val = valCopy;
-
-         U32 expandedBufferSize = ( nBufferSize  * 2 ) + 32;
-         TempAlloc<char> expandedBuffer( expandedBufferSize );
-         if(f->elementCount == 1)
-            dSprintf(expandedBuffer, expandedBufferSize, "%s = \"", f->pFieldname);
-         else
-            dSprintf(expandedBuffer, expandedBufferSize, "%s[%d] = \"", f->pFieldname, j);
-
-         // detect and collapse relative path information
-         char fnBuf[1024];
-         if (f->type == TypeFilename)
-         {
-            Con::collapsePath(fnBuf, 1024, val);
-            val = fnBuf;
-         }
-
-         expandEscape((char*)expandedBuffer + dStrlen(expandedBuffer), val);
-         dStrcat(expandedBuffer, "\";\r\n");
-
-         stream.writeTabs(tabStop);
-         stream.write(dStrlen(expandedBuffer),expandedBuffer);
+         userData.buffer.resize(4096);
+         
+         f->enumKeysFn(&userData, getVM(), getVMObject(), f, +[](void* user, KorkApi::Vm* vmPtr, KorkApi::VMObject* obj, KorkApi::ConsoleValue key, KorkApi::ConsoleValue value){
+            bool isString = key.isString() || key.isCustom();
+            const char* keyName = vmPtr->valueAsString(key);
+            EnumKeyUser* enumUser = (EnumKeyUser*)user;
+            const char* valueS = vmPtr->valueAsString(value);
+            
+            if (isString)
+            {
+               dSprintf(enumUser->buffer.data(), enumUser->buffer.size(), "%s[\"%s\"] = \"%s\";\r\n", enumUser->fieldName, keyName, valueS);
+            }
+            else
+            {
+               dSprintf(enumUser->buffer.data(), enumUser->buffer.size(), "%s[%s] = \"%s\";\r\n", enumUser->fieldName, keyName, valueS);
+            }
+            
+            enumUser->s->writeTabs(enumUser->tabStop);
+            enumUser->s->write((U32)strlen(enumUser->buffer.data()), enumUser->buffer.data());
+            return true;
+         });
       }
-   }    
+      else
+      {
+         for(U32 j = 0; S32(j) < elementCount; j++)
+         {
+            char array[8];
+            dSprintf( array, 8, "%d", j );
+            const char *val = getDataField(fieldName, array );
+            
+            // Make a copy for the field check.
+            if (!val)
+               continue;
+            
+            valCopy = val;
+            
+            if (!writeField(fieldName, valCopy.c_str()))
+               continue;
+            
+            size_t expandedBufferSize = ( (valCopy.size() + 1)  * 2 ) + 32;
+            userData.buffer.resize(expandedBufferSize);
+            
+            if(f->elementCount == 1)
+            {
+               dSprintf(userData.buffer.data(), expandedBufferSize, "%s = \"", f->pFieldname);
+            }
+            else
+            {
+               dSprintf(userData.buffer.data(), expandedBufferSize, "%s[%d] = \"", f->pFieldname, j);
+            }
+            
+            // detect and collapse relative path information
+            /*char fnBuf[1024]; // Not implemented YET
+             if (f->type == TypeFilename)
+             {
+             Con::collapsePath(fnBuf, 1024, val);
+             val = fnBuf;
+             }*/
+            
+            expandEscape(userData.buffer.data() + strlen(userData.buffer.data()), val);
+            dStrcat(userData.buffer.data(), "\";\r\n");
+            
+            stream.writeTabs(tabStop);
+            stream.write((U32)strlen(userData.buffer.data()), userData.buffer.data());
+         }
+      }
+   }
    if(mFieldDictionary && mCanSaveFieldDictionary)
+   {
       mFieldDictionary->writeFields(this, stream, tabStop);
-#endif
+   }
 }
 
 void SimObject::write(Stream &stream, U32 tabStop, U32 flags)
@@ -564,14 +517,14 @@ bool SimObject::save(const char* pcFileName, bool bOnlySelected)
    static const char *beginMessage = "//--- OBJECT WRITE BEGIN ---";
    static const char *endMessage = "//--- OBJECT WRITE END ---";
    FileStream stream;
-   MemStream f(0, NULL, false, false);
-   TempAlloc<char> w;
+   MemStream f(0, nullptr, false, false);
+   std::vector<char> w;
 
    if (stream.open(pcFileName, FileStream::Read))
    {
-      w = TempAlloc<char>(stream.getStreamSize());
-      f = MemStream(stream.getStreamSize(), w.ptr, true, false);
-      stream.read(stream.getStreamSize(), w.ptr);
+      w.resize(stream.getStreamSize());
+      f = MemStream(stream.getStreamSize(), w.data(), true, false);
+      stream.read(stream.getStreamSize(), w.data());
       stream.close();
    }
 
@@ -630,8 +583,8 @@ bool SimObject::save(const char* pcFileName, bool bOnlySelected)
       stream.write(2, "\r\n");
    }
 
-   Con::setVariable("$DocRoot", NULL);
-   Con::setVariable("$ModRoot", NULL);
+   Con::setVariable("$DocRoot", nullptr);
+   Con::setVariable("$ModRoot", nullptr);
 
    return true;
 
@@ -670,7 +623,7 @@ ConsoleFunction(isObject, bool, 2, 2, "handle")
    if (!dStrcmp(argv[1], "0") || !dStrcmp(argv[1], ""))
       return false;
    else
-      return (Sim::findObject(argv[1]) != NULL);
+      return (Sim::findObject(argv[1]) != nullptr);
 }
 
 /*! cancel a previously scheduled event
@@ -777,14 +730,14 @@ ConsoleFunction(getTimeSinceStart, S32, 2, 2, "eventID")
  @boundto
  Sim::postEvent
  */
-ConsoleFunction(schedule, S32, 4, 0, "t , objID || 0 , functionName, arg0, ... , argN" )
+ConsoleFunctionValue(schedule, 4, 0, "t , objID || 0 , functionName, arg0, ... , argN" )
 {
-   U32 timeDelta = U32(dAtof(argv[1]));
+   U32 timeDelta = U32(vmPtr->valueAsFloat(argv[1]));
    SimObject *refObject = Sim::findObject(argv[2]);
    if(!refObject)
    {
-      if(argv[2][0] != '0')
-         return 0;
+      if(vmPtr->valueAsInt(argv[2]) != 0)
+         return KorkApi::ConsoleValue::makeUnsigned(0);
       
       refObject = Sim::getRootGroup();
    }
@@ -793,9 +746,9 @@ ConsoleFunction(schedule, S32, 4, 0, "t , objID || 0 , functionName, arg0, ... ,
    S32 ret = Sim::postEvent(refObject, evt, Sim::getCurrentTime() + timeDelta);
    // #ifdef DEBUG
    //    Con::printf("ref %s schedule(%s) = %d", argv[2], argv[3], ret);
-   //    Con::executef(1, "backtrace");
+   //    Con::executef( "backtrace");
    // #endif
-   return ret;
+   return KorkApi::ConsoleValue::makeUnsigned(ret);
 }
 
 ConsoleFunctionGroupEnd( SimFunctions );
@@ -814,11 +767,11 @@ ConsoleMethod(SimObject, save, bool, 3, 4, "fileName, [selectedOnly]?")
    if(argc > 3)
       bSelectedOnly   = dAtob(argv[3]);
    
-   const char* filename = NULL;
+   const char* filename = nullptr;
    
    filename = argv[2];
    
-   if(filename == NULL || *filename == 0)
+   if(filename == nullptr || *filename == 0)
       return false;
    
    return object->save(filename, bSelectedOnly);
@@ -976,7 +929,7 @@ ConsoleMethod(SimObject, getClassName, const char*, 2, 2, "")
 ConsoleMethod(SimObject, getFieldValue, const char*, 3, 3, "fieldName")
 {
    const char *fieldName = StringTable->insert( argv[2] );
-   return object->getDataField( fieldName, NULL );
+   return object->getDataField( fieldName, nullptr );
 }
 
 /*! Set the value of any field.
@@ -1026,7 +979,7 @@ ConsoleMethod(SimObject, setFieldValue, bool, 4, 4, "fieldName,value")
    const char *fieldName = StringTable->insert(argv[2]);
    const char *value = argv[3];
    
-   object->setDataField( fieldName, NULL, value );
+   object->setDataField( fieldName, nullptr, value );
    
    return true;
    
@@ -1175,7 +1128,7 @@ ConsoleMethod(SimObject, setSuperClassNamespace, void, 2, 3, "")
  %object.call(%method, %newNamespace);
  @endcode
  */
-ConsoleMethod( SimObject, call, const char*, 2, 0, "methodName, [args]*")
+ConsoleMethodValue( SimObject, call, 2, 0, "methodName, [args]*")
 {
    argv[1] = argv[2];
    return Con::execute( object, argc - 1, argv + 1 );
@@ -1322,18 +1275,18 @@ ConsoleMethod(SimObject, delete, void, 2, 2, "")
  
  @see ::schedule
  */
-ConsoleMethod(SimObject,schedule, S32, 4, 0, "time , command , [arg]* ")
+ConsoleMethodValue(SimObject,schedule, 4, 0, "time , command , [arg]* ")
 {
-   U32 timeDelta = U32(dAtof(argv[2]));
+   SimTime timeDelta = (SimTime)vmPtr->valueAsInt(argv[2]);
    argv[2] = argv[3];
    argv[3] = argv[1];
    SimConsoleEvent *evt = new SimConsoleEvent(argc - 2, argv + 2, true);
-   S32 ret = Sim::postEvent(object, evt, Sim::getCurrentTime() + timeDelta);
+   U32 ret = Sim::postEvent(object, evt, Sim::getCurrentTime() + timeDelta);
    // #ifdef DEBUG
    //    Con::printf("obj %s schedule(%s) = %d", argv[3], argv[2], ret);
-   //    Con::executef(1, "backtrace");
+   //    Con::executef( "backtrace");
    // #endif
-   return ret;
+   return KorkApi::ConsoleValue::makeUnsigned(ret);
 }
 
 static bool compareFields(const AbstractClassRep::Field* fa,
@@ -1403,7 +1356,7 @@ ConsoleMethod(SimObject, getDynamicField, const char*, 3, 3, "index")
       if (!(*itr))
       {
          Con::warnf("Invalid dynamic field index passed to SimObject::getDynamicField!");
-         return NULL;
+         return nullptr;
       }
       ++itr;
    }
@@ -1418,7 +1371,7 @@ ConsoleMethod(SimObject, getDynamicField, const char*, 3, 3, "index")
    }
    
    Con::warnf("Invalid dynamic field index passed to SimObject::getDynamicField!");
-   return NULL;
+   return nullptr;
 }
 
 /*! dump the object to  the console.
@@ -1436,38 +1389,42 @@ ConsoleMethod(SimObject,dump, void, 2, 2, "")
 
 void SimObject::dump()
 {
-#if TOFIX
    const AbstractClassRep::FieldList &list = getFieldList();
    char expandedBuffer[4096];
 
    Con::printf("Static Fields:");
-   Vector<const AbstractClassRep::Field *> flist(__FILE__, __LINE__);
-
+   std::vector<const AbstractClassRep::Field *> flist;
+   
    for(U32 i = 0; i < (U32)list.size(); i++)
       flist.push_back(&list[i]);
 
    std::sort(flist.begin(),flist.end(),compareFields);
 
-   for(Vector<const AbstractClassRep::Field *>::iterator itr = flist.begin(); itr != flist.end(); itr++)
+   for(std::vector<const AbstractClassRep::Field *>::iterator itr = flist.begin(); itr != flist.end(); itr++)
    {
       const AbstractClassRep::Field* f = *itr;
       if( f->type == AbstractClassRep::DepricatedFieldType ||
           f->type == AbstractClassRep::StartGroupFieldType ||
           f->type == AbstractClassRep::EndGroupFieldType) continue;
 
+      StringTableEntry steField = getVM()->internString(f->pFieldname);
       for(U32 j = 0; S32(j) < f->elementCount; j++)
       {
-         // [neo, 07/05/2007 - #3000]
-         // Some objects use dummy vars and projected fields so make sure we call the get functions 
-         //const char *val = Con::getData(f->type, (void *) (((const char *)object) + f->offset), j, f->table, f->flag);                          
-         const char *val = (*f->getDataFn)( this, Con::getData(f->type, (void *) (((const char *)this) + f->offset), j, f->table, f->flag) );// + typeSizes[fld.type] * array1));
+         KorkApi::ConsoleValue arrayValue = KorkApi::ConsoleValue::makeUnsigned(j);
+         KorkApi::ConsoleValue fieldValue = getVM()->getObjectField(getVMObject(), steField, arrayValue);
+         const char* val = getVM()->valueAsString(fieldValue);
 
          if(!val /*|| !*val*/)
             continue;
          if(f->elementCount == 1)
+         {
             dSprintf(expandedBuffer, sizeof(expandedBuffer), "  %s = \"", f->pFieldname);
+         }
          else
+         {
             dSprintf(expandedBuffer, sizeof(expandedBuffer), "  %s[%d] = \"", f->pFieldname, j);
+         }
+         
          expandEscape(expandedBuffer + dStrlen(expandedBuffer), val);
          Con::printf("%s\"", expandedBuffer);
       }
@@ -1475,19 +1432,16 @@ void SimObject::dump()
 
    Con::printf("Dynamic Fields:");
    if(getFieldDictionary())
+   {
       getFieldDictionary()->printFields(this);
+   }
 
    Con::printf("Methods:");
-   Namespace *ns = getNamespace();
-   Vector<Namespace::Entry *> vec(__FILE__, __LINE__);
+   KorkApi::NamespaceId nsId = getNamespace();
 
-   if(ns)
-      ns->getEntryList(&vec);
-
-   for(Vector<Namespace::Entry *>::iterator j = vec.begin(); j != vec.end(); j++)
-      Con::printf("  %s() - %s", (*j)->mFunctionName, (*j)->mUsage ? (*j)->mUsage : "");
-   
-#endif
+   getVM()->enumerateNamespace(nsId, getVM(), [](void* userPtr, StringTableEntry funcName, const char* usage){
+      Con::printf("  %s() - %s", funcName, usage);
+   });
 }
 
 /*! Use the getType method to get the type for this object.
@@ -1522,6 +1476,23 @@ bool SimObject::isMethod( const char* methodName )
    return false;
 }
 
+//---------------------------------------------------------------------------
+
+StringTableEntry SimObject::getMethodNamespace( const char* methodName )
+{
+   if( !methodName || !methodName[0] )
+      return StringTable->EmptyString;
+
+   StringTableEntry stname = StringTable->insert( methodName );
+
+   if (getVM())
+      return getVM()->getMethodNamespaceName(getNamespace(), stname);
+   
+   return StringTable->EmptyString;
+}
+
+//---------------------------------------------------------------------------
+
 /*! Returns wether the method exists for this object.
  
  @returns true if the method exists; false otherwise
@@ -1532,6 +1503,12 @@ bool SimObject::isMethod( const char* methodName )
 ConsoleMethod(SimObject, isMethod, bool, 3, 3, "string methodName")
 {
    return object->isMethod( argv[2] );
+}
+
+// Function to get the defined namespace of a method
+ConsoleMethod(SimObject, getMethodNamespace, bool, 3, 3, "string methodName")
+{
+   return object->getMethodNamespace( argv[2] );
 }
 
 /*! return the number of static ("built-in") fields.
@@ -1636,80 +1613,24 @@ const char *SimObject::tabComplete(const char *prevText, S32 baseLen, bool fForw
 
 void SimObject::setDataField(StringTableEntry slotName, const char *array, const char *value)
 {
-#if TOFIX
-   // first search the static fields if enabled
-   if (canModStaticFields())
-   {
-      const AbstractClassRep::Field *fld = findField(slotName);
-      if(fld)
-      {
-         if( fld->type == AbstractClassRep::DepricatedFieldType ||
-            fld->type == AbstractClassRep::StartGroupFieldType ||
-            fld->type == AbstractClassRep::EndGroupFieldType)
-            return;
-         
-         S32 array1 = array ? dAtoi(array) : 0;
-         
-         if(array1 >= 0 && array1 < fld->elementCount && fld->elementCount >= 1)
-         {
-            // If the set data notify callback returns true, then go ahead and
-            // set the data, otherwise, assume the set notify callback has either
-            // already set the data, or has deemed that the data should not
-            // be set at all.
-            TempAlloc<char> buffer(2048);
-            TempAlloc<char> bufferSecure(2048); // This buffer is used to make a copy of the data
-            // so that if the prep functions or any other functions use the string stack, the data
-            // is not corrupted.
-            
-            ConsoleBaseType *cbt = ConsoleBaseType::getType( fld->type );
-            AssertFatal( cbt != NULL, "Could not resolve Type Id." );
-            
-            const char* szBuffer = cbt->prepData( value, buffer, 2048 );
-            dMemset( bufferSecure, 0, 2048 );
-            dMemcpy( bufferSecure, szBuffer, dStrlen( szBuffer ) );
-            
-            if( (*fld->setDataFn)( this, bufferSecure ) )
-               Con::setData(fld->type, (void *) (((const char *)this) + fld->offset), array1, 1, &value, fld->table);
-            
-            if(fld->validator)
-            {
-               fld->validator->validateType(this, (void *) (((const char *)this) + fld->offset));
-            }
-            
-            onStaticModified( slotName, value );
-            
-            return;
-         }
-         
-         if(fld->validator)
-         {
-            fld->validator->validateType(this, (void *) (((const char *)this) + fld->offset));
-         }
-         
-         onStaticModified( slotName, value );
-         return;
-      }
-   }
-   if (canModDynamicFields())
-   {
-      setDataFieldDynamic(slotName, array, value);
-   }
-#endif
+   getVM()->setObjectField(getVMObject(),slotName, KorkApi::ConsoleValue::makeString(value), KorkApi::ConsoleValue::makeString(array));
 }
 
-void SimObject::setDataFieldDynamic(StringTableEntry slotName, const char *array, const char *value)
+void SimObject::setDataFieldDynamic(StringTableEntry slotName, const char *array, const char *value, U32 typeId)
 {
    if(!mFieldDictionary)
       mFieldDictionary = new SimFieldDictionary;
 
    if(!array)
-      mFieldDictionary->setFieldValue(slotName, value);
+   {
+      mFieldDictionary->setFieldValue(slotName, value, typeId);
+   }
    else
    {
       char buf[256];
       dStrcpy(buf, slotName);
       dStrcat(buf, array);
-      mFieldDictionary->setFieldValue(StringTable->insert(buf), value);
+      mFieldDictionary->setFieldValue(StringTable->insert(buf), value, typeId);
    }
 }
 
@@ -1729,39 +1650,23 @@ void  SimObject::dumpClassHierarchy()
 
 const char *SimObject::getDataField(StringTableEntry slotName, const char *array)
 {
-#if TOFIX
-   if (canModStaticFields())
-   {
-      S32 array1 = array ? dAtoi(array) : -1;
-      const AbstractClassRep::Field *fld = findField(slotName);
-   
-      if(fld)
-      {
-         if(array1 == -1 && fld->elementCount == 1)
-            return (*fld->getDataFn)( this, Con::getData(fld->type, (void *) (((const char *)this) + fld->offset), 0, fld->table, fld->flag) );
-         if(array1 >= 0 && array1 < fld->elementCount)
-            return (*fld->getDataFn)( this, Con::getData(fld->type, (void *) (((const char *)this) + fld->offset), array1, fld->table, fld->flag) );// + typeSizes[fld.type] * array1));
-         return "";
-      }
-   }
-
-   if (canModDynamicFields())
-   {
-      return getDataFieldDynamic(slotName, array);
-   }
-#endif
-   return "";
+   return getVM()->valueAsString(getVM()->getObjectField(getVMObject(), slotName, KorkApi::ConsoleValue::makeString(array)));
 }
 
 
-const char *SimObject::getDataFieldDynamic(StringTableEntry slotName, const char *array)
+const char *SimObject::getDataFieldDynamic(StringTableEntry slotName, const char *array, U32* outTypeId)
 {
    if(!mFieldDictionary)
       return "";
 
+   if (outTypeId)
+   {
+      *outTypeId = 0;
+   }
+   
    if(!array)
    {
-      if (const char* val = mFieldDictionary->getFieldValue(slotName))
+      if (const char* val = mFieldDictionary->getFieldValue(slotName, outTypeId))
          return val;
    }
    else
@@ -1769,9 +1674,11 @@ const char *SimObject::getDataFieldDynamic(StringTableEntry slotName, const char
       static char buf[256];
       dStrcpy(buf, slotName);
       dStrcat(buf, array);
-      if (const char* val = mFieldDictionary->getFieldValue(StringTable->insert(buf)))
+      if (const char* val = mFieldDictionary->getFieldValue(StringTable->insert(buf), outTypeId))
          return val;
    }
+   
+   return "";
 }
 
 //-----------------------------------------------------------------------------
@@ -1804,89 +1711,9 @@ bool SimObject::isLocked()
 
 //-----------------------------------------------------------------------------
 
-const char *SimObject::getPrefixedDataField(StringTableEntry fieldName, const char *array)
-{
-    // Sanity!
-    AssertFatal( fieldName != NULL, "Cannot get field value with NULL field name." );
-
-    // Fetch field value.
-    const char* pFieldValue = getDataField( fieldName, array );
-
-    // Sanity.
-    AssertFatal( pFieldValue != NULL, "Field value cannot be NULL." );
-
-    // Return without the prefix if there's no value.
-    if ( *pFieldValue == 0 )
-        return StringTable->EmptyString;
-
-    // Fetch the field prefix.
-    StringTableEntry fieldPrefix = getDataFieldPrefix( fieldName );
-
-    // Sanity!
-    AssertFatal( fieldPrefix != NULL, "Field prefix cannot be NULL." );
-
-    // Calculate a buffer size including prefix.
-    const U32 valueBufferSize = dStrlen(fieldPrefix) + dStrlen(pFieldValue) + 1;
-
-    // Fetch a buffer.
-    KorkApi::ConsoleValue pValueBufferV = Con::getReturnBuffer( valueBufferSize );
-    char* pValueBuffer = (char*)pValueBufferV.evaluatePtr(sVM->getAllocBase());
-
-    // Format the value buffer.
-    dSprintf( pValueBuffer, valueBufferSize, "%s%s", fieldPrefix, pFieldValue );
-
-    return pValueBuffer;
-}
-
-//-----------------------------------------------------------------------------
-
-void SimObject::setPrefixedDataField(StringTableEntry fieldName, const char *array, const char *value)
-{
-    // Sanity!
-    AssertFatal( fieldName != NULL, "Cannot set object field value with NULL field name." );
-    AssertFatal( value != NULL, "Field value cannot be NULL." );
-
-    // Set value without prefix if there's no value.
-    if ( *value == 0 )
-    {
-        setDataField( fieldName, NULL, value );
-        return;
-    }
-
-    // Fetch the field prefix.
-    StringTableEntry fieldPrefix = getDataFieldPrefix( fieldName );
-
-    // Sanity.
-    AssertFatal( fieldPrefix != NULL, "Field prefix cannot be NULL." );
-
-    // Do we have a field prefix?
-    if ( fieldPrefix == StringTable->EmptyString )
-    {
-        // No, so set the data field in the usual way.
-        setDataField( fieldName, NULL, value );
-        return;
-    }
-
-    // Yes, so fetch the length of the field prefix.
-    const U32 fieldPrefixLength = dStrlen(fieldPrefix);
-
-    // Yes, so does it start with the object field prefix?
-    if ( dStrnicmp( value, fieldPrefix, fieldPrefixLength ) != 0 )
-    {
-        // No, so set the data field in the usual way.
-        setDataField( fieldName, NULL, value );
-        return;
-    }
-
-    // Yes, so set the data excluding the prefix.
-    setDataField( fieldName, NULL, value + fieldPrefixLength );
-}
-
-//-----------------------------------------------------------------------------
-
 void SimObject::setLocked( bool b = true )
 {
-   setDataField(StringTable->insert("locked", false), NULL, b ? "true" : "false" );
+   setDataField(StringTable->insert("locked", false), nullptr, b ? "true" : "false" );
 }
 
 //-----------------------------------------------------------------------------
@@ -1904,7 +1731,7 @@ bool SimObject::isHidden()
 
 void SimObject::setHidden(bool b = true)
 {
-   setDataField(StringTable->insert("hidden", false), NULL, b ? "true" : "false" );
+   setDataField(StringTable->insert("hidden", false), nullptr, b ? "true" : "false" );
 }
 
 //-----------------------------------------------------------------------------
@@ -2007,147 +1834,6 @@ ConsoleMethod(SimObject, isChildOfGroup, bool, 3,3, "groupID")
 
 //-----------------------------------------------------------------------------
 
-const char *SimObject::getPrefixedDynamicDataField(StringTableEntry fieldName, const char *array, const S32 fieldType )
-{
-#if TOFIX
-    // Sanity!
-    AssertFatal( fieldName != NULL, "Cannot get field value with NULL field name." );
-
-    // Fetch field value.
-    const char* pFieldValue = getDataField( fieldName, array );
-
-    // Sanity.
-    AssertFatal( pFieldValue != NULL, "Field value cannot be NULL." );
-
-    // Return the field if no field type is specified.
-    if ( fieldType == -1 )
-        return pFieldValue;
-
-    // Return without the prefix if there's no value.
-    if ( *pFieldValue == 0 )
-        return StringTable->EmptyString;
-
-    // Fetch the console base type.
-    ConsoleBaseType* pConsoleBaseType = ConsoleBaseType::getType( fieldType );
-
-    // Did we find the console base type?
-    if ( pConsoleBaseType == NULL )
-    {
-        // No, so warn.
-        Con::warnf("getPrefixedDynamicDataField() - Invalid field type '%d' specified for field '%s' with value '%s'.",
-            fieldType, fieldName, pFieldValue );
-    }
-
-    // Fetch the field prefix.
-    StringTableEntry fieldPrefix = pConsoleBaseType->getTypePrefix();
-
-    // Sanity!
-    AssertFatal( fieldPrefix != NULL, "Field prefix cannot be NULL." );
-
-    // Calculate a buffer size including prefix.
-    const U32 valueBufferSize = dStrlen(fieldPrefix) + dStrlen(pFieldValue) + 1;
-
-    // Fetch a buffer.
-    char* pValueBuffer = Con::getReturnBuffer( valueBufferSize );
-
-    // Format the value buffer.
-    dSprintf( pValueBuffer, valueBufferSize, "%s%s", fieldPrefix, pFieldValue );
-
-    return pValueBuffer;
-#endif
-   return "";
-}
-
-//-----------------------------------------------------------------------------
-
-void SimObject::setPrefixedDynamicDataField(StringTableEntry fieldName, const char *array, const char *value, const S32 fieldType )
-{
-#if TOFIX
-    // Sanity!
-    AssertFatal( fieldName != NULL, "Cannot set object field value with NULL field name." );
-    AssertFatal( value != NULL, "Field value cannot be NULL." );
-
-    // Set value without prefix if no field type was specified.
-    if ( fieldType == -1 )
-    {
-        setDataField( fieldName, NULL, value );
-        return;
-    }
-
-    // Fetch the console base type.
-    ConsoleBaseType* pConsoleBaseType = ConsoleBaseType::getType( fieldType );
-
-    // Did we find the console base type?
-    if ( pConsoleBaseType == NULL )
-    {
-        // No, so warn.
-        Con::warnf("setPrefixedDynamicDataField() - Invalid field type '%d' specified for field '%s' with value '%s'.",
-            fieldType, fieldName, value );
-    }
-
-    // Set value without prefix if there's no value or we didn't find the console base type.
-    if ( *value == 0 || pConsoleBaseType == NULL )
-    {
-        setDataField( fieldName, NULL, value );
-        return;
-    }
-
-    // Fetch the field prefix.
-    StringTableEntry fieldPrefix = pConsoleBaseType->getTypePrefix();
-
-    // Sanity.
-    AssertFatal( fieldPrefix != NULL, "Field prefix cannot be NULL." );
-
-    // Do we have a field prefix?
-    if ( fieldPrefix == StringTable->EmptyString )
-    {
-        // No, so set the data field in the usual way.
-        setDataField( fieldName, NULL, value );
-        return;
-    }
-
-    // Yes, so fetch the length of the field prefix.
-    const U32 fieldPrefixLength = dStrlen(fieldPrefix);
-
-    // Yes, so does it start with the object field prefix?
-    if ( dStrnicmp( value, fieldPrefix, fieldPrefixLength ) != 0 )
-    {
-        // No, so set the data field in the usual way.
-        setDataField( fieldName, NULL, value );
-        return;
-    }
-
-    // Yes, so set the data excluding the prefix.
-    setDataField( fieldName, NULL, value + fieldPrefixLength );
-#endif
-}
-
-//-----------------------------------------------------------------------------
-
-StringTableEntry SimObject::getDataFieldPrefix( StringTableEntry fieldName )
-{
-#if TOFIX
-    // Sanity!
-    AssertFatal( fieldName != NULL, "Cannot get field prefix with NULL field name." );
-
-    // Find the field.
-    const AbstractClassRep::Field* pField = findField( fieldName );
-
-    // Return nothing if field was not found.
-    if ( pField == NULL )
-        return StringTable->EmptyString;
-
-    // Yes, so fetch the console base type.
-    ConsoleBaseType* pConsoleBaseType = ConsoleBaseType::getType( pField->type );
-
-    // Fetch the type prefix.
-    return pConsoleBaseType->getTypePrefix();
-#endif
-   return StringTable->EmptyString;
-}
-
-//-----------------------------------------------------------------------------
-
 U32 SimObject::getDataFieldType( StringTableEntry slotName, const char* array )
 {
    const AbstractClassRep::Field* field = findField( slotName );
@@ -2160,7 +1846,7 @@ U32 SimObject::getDataFieldType( StringTableEntry slotName, const char* array )
 //---------------------------------------------------------------------------
 
 static Chunker<SimObject::Notify> notifyChunker(128000);
-SimObject::Notify *SimObject::mNotifyFreeList = NULL;
+SimObject::Notify *SimObject::mNotifyFreeList = nullptr;
 
 SimObject::Notify *SimObject::allocNotify()
 {
@@ -2196,7 +1882,7 @@ SimObject::Notify* SimObject::removeNotify(void *ptr, SimObject::Notify::Type ty
       }
       list = &((*list)->next);
    }
-   return NULL;
+   return nullptr;
 }
 
 void SimObject::deleteNotify(SimObject* obj)
@@ -2268,7 +1954,7 @@ void SimObject::processDeleteNotifies()
       else
       {
          // it must be an object ref - a pointer refs this object
-         *((SimObject **) note->ptr) = NULL;
+         *((SimObject **) note->ptr) = nullptr;
       }
       freeNotify(note);
    }
@@ -2302,18 +1988,18 @@ void SimObject::initPersistFields()
    addGroup("SimBase");
    addField("canSaveDynamicFields",    TypeBool,      Offset(mCanSaveFieldDictionary, SimObject), &writeCanSaveDynamicFields, "");
    addField("internalName",            TypeString,       Offset(mInternalName, SimObject), &writeInternalName, "");   
-   // TOFIX addProtectedField("parentGroup",        TypeSimObjectPtr, Offset(mGroup, SimObject), &setParentGroup, NULL, &writeParentGroup, "Group hierarchy parent of the object." );
+   addProtectedField("parentGroup",    TypeSimObjectPtr, Offset(mGroup, SimObject), &setParentGroup, &writeParentGroup, "Group hierarchy parent of the object." );
    endGroup("SimBase");
 
    // Namespace Linking.
    //registerClassNameFields(); // TGE compat - this should only be allowed on GameBase or ScriptObjectxw
 }
 
-void SimObject::registerClassNameFields()
+void SimObject::registerClassNameFields(bool includeSuper)
 {
    addGroup("Namespace Linking");
-   //addProtectedField("superclass", TypeString, Offset(mSuperClassName, SimObject), &setSuperClass, NULL, &writeSuperclass, "Script Class of object.");
-   //addProtectedField("className",      TypeString, Offset(mClassName,      SimObject), &setClass,      NULL, &writeClass, "Script SuperClass of object.");
+   addField("class",  TypeString,              Offset(mClassName,  SimObject)); // tgemit - compat
+   //addProtectedField("superclass", TypeString, Offset(mSuperClassName, SimObject), &setSuperClass, nullptr, &writeSuperclass, "Script Class of object.");
    endGroup("Namespace Linking");
 }
 
@@ -2326,7 +2012,7 @@ SimObject* SimObject::clone( const bool copyDynamicFields )
     if (!pCloneObject)
     {
         Con::errorf("SimObject::clone() - Unable to create cloned object.");
-        return NULL;
+        return nullptr;
     }
 
     // Register object.
@@ -2334,7 +2020,7 @@ SimObject* SimObject::clone( const bool copyDynamicFields )
     {
         Con::warnf("SimObject::clone() - Unable to register cloned object.");
         delete pCloneObject;
-        return NULL;
+        return nullptr;
     }
 
     // Copy object.
@@ -2354,22 +2040,33 @@ void SimObject::copyTo(SimObject* object)
 {
    object->mClassName = mClassName;
    object->mSuperClassName = mSuperClassName;
-   object->mVMNameSpace = NULL;
+   object->mVMNameSpace = nullptr;
    object->linkNamespaces();
 }
 
 //-----------------------------------------------------------------------------
 
-bool SimObject::setParentGroup(void* obj, const char* data)
+bool SimObject::setParentGroup(void* userPtr,
+                               KorkApi::Vm* vmPtr,
+                               KorkApi::TypeStorageInterface* inputStorage,
+                               KorkApi::TypeStorageInterface* outputStorage,
+                               void* fieldUserPtr,
+                               BitSet32 flag,
+                               U32 requestedType)
 {
-   SimGroup *parent = NULL;
-   SimObject *object = static_cast<SimObject*>(obj);
+   SimGroup *parent = nullptr;
+   SimObject *object = static_cast<SimObject*>(outputStorage->fieldObject);
+   if (object == nullptr || inputStorage->data.argc != 1)
+   {
+      return false;
+   }
 
-   if(Sim::findObject(data, parent))
+   if(Sim::findObject(vmPtr->valueAsString(*inputStorage->data.storageRegister), parent))
+   {
       parent->addObject(object);
+   }
    
-   // always return false, because we've set mGroup when we called addObject
-   return false;
+   return true;
 }
 
 
@@ -2482,14 +2179,17 @@ void SimObject::linkNamespaces()
 
    // ObjectName -> ClassName
    StringTableEntry objectName = getName();
-   /* TOFIX if( objectName && objectName[0] && objectName != getClassRep()->getNameSpace()->mName )
+   if( objectName && objectName[0] && 
+       strcasecmp(objectName, getClassRep()->getClassName()) != 0 )
    {
-      if( Con::linkNamespaces( parent, objectName ) )
+      if( sVM->linkNamespace( parent, objectName ) )
+      {
          parent = objectName;
-   }*/
+      }
+   }
 
    // Store our namespace.
-   mVMNameSpace = Con::lookupNamespace( parent );
+   mVMNameSpace = sVM->findNamespace(parent);
    getVM()->setObjectNamespace(getVMObject(), mVMNameSpace);
 }
 
@@ -2536,8 +2236,8 @@ void SimObject::unlinkNamespaces()
       }
    }
 
-   mVMNameSpace = NULL;
-   getVM()->setObjectNamespace(getVMObject(), NULL);
+   mVMNameSpace = nullptr;
+   getVM()->setObjectNamespace(getVMObject(), nullptr);
 }
 
 void SimObject::setClassNamespace( const char *classNamespace )
@@ -2674,15 +2374,10 @@ ConsoleMethod(SimObject, getProgenitorFile, const char*, 2, 2, "")
 */
 ConsoleMethod(SimObject, getFieldType, const char*, 3, 3, "fieldName")
 {
-#if TOFIX
    const char *fieldName = StringTable->insert( argv[2] );
-   U32 typeID = object->getDataFieldType( fieldName, NULL );
-   ConsoleBaseType* type = ConsoleBaseType::getType( typeID );
-   
-   if( type )
-      return type->getTypeClassName();
-#endif
-   return "";
+   U32 typeID = object->getDataFieldType( fieldName, nullptr );
+   KorkApi::TypeInfo* type = vmPtr->getTypeInfo(typeID);
+   return type ? type->name : "";
 }
 
 /*! Clones the object.
@@ -2698,7 +2393,7 @@ ConsoleMethod(SimObject, clone, S32, 2, 3, "[copyDynamicFields = false]?")
     SimObject* pClonedObject = object->clone( copyDynamicFields );
 
     // Finish if object was not cloned.
-    if ( pClonedObject == NULL )
+    if ( pClonedObject == nullptr )
         return 0;
 
     return pClonedObject->getId();
@@ -2921,7 +2616,7 @@ void SimDataBlock::write(Stream &stream, U32 tabStop, U32 flags)
 void SimSet::addObject(SimObject* obj)
 {
    lock();
-   objectList.pushBack(obj);
+   objectList.push_back(obj);
    deleteNotify(obj);
    unlock();
 }
@@ -2929,7 +2624,11 @@ void SimSet::addObject(SimObject* obj)
 void SimSet::removeObject(SimObject* obj)
 {
    lock();
-   objectList.remove(obj);
+   auto itr = std::find(objectList.begin(), objectList.end(), obj);
+   if (itr != objectList.end())
+   {
+      objectList.erase(itr);
+   }
    clearNotify(obj);
    unlock();
 }
@@ -2937,7 +2636,7 @@ void SimSet::removeObject(SimObject* obj)
 void SimSet::pushObject(SimObject* pObj)
 {
    lock();
-   objectList.pushBackForce(pObj);
+   objectList.push_back(pObj);
    deleteNotify(pObj);
    unlock();
 }
@@ -2953,30 +2652,33 @@ void SimSet::popObject()
       return;
    }
 
-   SimObject* pObject = objectList[objectList.size() - 1];
-
-   objectList.removeStable(pObject);
+   SimObject* pObject = objectList.back();
+   objectList.pop_back();
    clearNotify(pObject);
 }
 
 //-----------------------------------------------------------------------------
 
-void SimSet::callOnChildren( const char * method, S32 argc, const char *argv[], bool executeOnChildGroups )
+void SimSet::callOnChildren( const char * method, S32 argc, KorkApi::ConsoleValue argv[], bool executeOnChildGroups )
 {
    // Prep the arguments for the console exec...
    // Make sure and leave args[1] empty.
-   const char* args[21];
-   args[0] = method;
+   KorkApi::ConsoleValue args[21];
+   args[0] = KorkApi::ConsoleValue::makeString(method);
    for (S32 i = 0; i < argc; i++)
+   {
       args[i + 2] = argv[i];
-
+   }
+   
    for( iterator i = begin(); i != end(); i++ )
    {
       SimObject *childObj = static_cast<SimObject*>(*i);
 
       if( childObj->isMethod( method ) )
+      {
          Con::execute(childObj, argc + 2, args);
-
+      }
+      
       if( executeOnChildGroups )
       {
          SimSet* childSet = dynamic_cast<SimSet*>(*i);
@@ -3036,7 +2738,8 @@ void SimSet::onRemove()
    MutexHandle handle;
    handle.lock(mMutex);
 
-   objectList.sortId();
+   std::sort(objectList.begin(), objectList.end(), SortSimObjectList);
+   
    if (objectList.size())
    {
       // This backwards iterator loop doesn't work if the
@@ -3446,9 +3149,10 @@ ConsoleMethod(SimSet, reorder, void, 4,4,  "SimObject child1, SimObject child2")
    @note This method recurses into all SimSets that are children to the set.
    @see callOnChildrenNoRecurse" )
 */
-ConsoleMethod(SimSet, callOnChildren, void, 3, 0, "string method, [string args]* ")
+ConsoleMethodValue(SimSet, callOnChildren, 3, 0, "string method, [string args]* ")
 {
-   object->callOnChildren( argv[2], argc - 3, argv + 3 );
+   object->callOnChildren( vmPtr->internString((const char*)argv[2].evaluatePtr(vmPtr->getAllocBase())), argc - 3, argv + 3 );
+   return KorkApi::ConsoleValue();
 }
 
 IMPLEMENT_CONOBJECT_CHILDREN(SimSet);
@@ -3468,7 +3172,7 @@ void SimSet::clear()
 {
    lock();
    while (size() > 0)
-      removeObject(objectList.last());
+      removeObject(objectList.back());
    unlock();
 }
 
@@ -3490,11 +3194,12 @@ SimGroup::~SimGroup()
    // If we have any objects at this point, they should
    // already have been removed from the manager, so we
    // can just delete them directly.
-   objectList.sortId();
-   while (!objectList.empty()) 
+   std::sort(objectList.begin(), objectList.end(), SortSimObjectList);
+   
+   while (!objectList.empty())
    {
-      delete objectList.last();
-      objectList.decrement();
+      delete objectList.back();
+      objectList.pop_back();
    }
 
    unlock();
@@ -3536,7 +3241,11 @@ void SimGroup::removeObject(SimObject* obj)
    {
       obj->onGroupRemove();
       nameDictionary.remove(obj);
-      objectList.remove(obj);
+      auto itr = std::find(objectList.begin(), objectList.end(), obj);
+      if (itr != objectList.end())
+      {
+         objectList.erase(itr);
+      }
       obj->mGroup = 0;
    }
    unlock();
@@ -3547,7 +3256,7 @@ void SimGroup::removeObject(SimObject* obj)
 void SimGroup::onRemove()
 {
    lock();
-   objectList.sortId();
+   std::sort(objectList.begin(), objectList.end(), SortSimObjectList);
    if (objectList.size())
    {
       // This backwards iterator loop doesn't work if the
@@ -3558,7 +3267,7 @@ void SimGroup::onRemove()
           // T2DJUNK WE NEED THIS? if ( (*ptr)->isProperlyAdded() )
           {
              (*ptr)->onGroupRemove();
-             (*ptr)->mGroup = NULL;
+             (*ptr)->mGroup = nullptr;
              (*ptr)->unregisterObject();
              (*ptr)->mGroup = this;
           }
@@ -3579,12 +3288,12 @@ SimObject *SimGroup::findObject(const char *namePath)
 
    StringTableEntry stName = StringTable->lookupn(namePath, len);
    if(!stName)
-      return NULL;
+      return nullptr;
 
    SimObject *root = nameDictionary.find(stName);
 
    if(!root)
-      return NULL;
+      return nullptr;
 
    if(namePath[len] == 0)
       return root;
@@ -3601,7 +3310,7 @@ SimObject *SimSet::findObject(const char *namePath)
 
    StringTableEntry stName = StringTable->lookupn(namePath, len);
    if(!stName)
-      return NULL;
+      return nullptr;
 
    lock();
    for(SimSet::iterator i = begin(); i != end(); i++)
@@ -3615,12 +3324,12 @@ SimObject *SimSet::findObject(const char *namePath)
       }
    }
    unlock();
-   return NULL;
+   return nullptr;
 }
 
 SimObject* SimObject::findObject(const char* )
 {
-   return NULL;
+   return nullptr;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -3668,7 +3377,7 @@ SimObject* SimSet::findObjectByInternalName(const char* internalName, bool searc
       }
    }
 
-   return NULL;
+   return nullptr;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -3683,129 +3392,112 @@ IMPLEMENT_CONOBJECT(SimGroup);
 
 // BEGIN T2D BLOCK
 
-extern ExprEvalState gEvalState;
-
 //-----------------------------------------------------------------------------
 
-SimConsoleEvent::SimConsoleEvent(S32 argc, const char **argv, bool onObject)
+SimConsoleEvent::SimConsoleEvent(S32 argc, KorkApi::ConsoleValue* argv, bool onObject)
 {
    mOnObject = onObject;
    mArgc = argc;
-   U32 totalSize = 0;
-   S32 i;
-   for(i = 0; i < argc; i++)
-      totalSize += dStrlen(argv[i]) + 1;
-   totalSize += sizeof(char *) * argc;
-
-   mArgv = (char **) dMalloc(totalSize);
-   char *argBase = (char *) &mArgv[argc];
-
-   for(i = 0; i < argc; i++)
+   mArgData.reserve(64);
+   
+   KorkApi::TypeStorageInterface outStorage = {};
+   KorkApi::TypeStorageInterface inArg = {};
+   
+   for (U32 i=0; i<argc; i++)
    {
-      mArgv[i] = argBase;
-      dStrcpy(mArgv[i], argv[i]);
-      argBase += dStrlen(argv[i]) + 1;
+      if (!sVM->initReturnTypeStorage(4096, argv[i].typeId, &outStorage) ||
+          !sVM->initRegisterTypeStorage(1, argv+i, &inArg) ||
+          !sVM->castValue(argv[i].typeId, &inArg, &outStorage, NULL, 0))
+      {
+         mArgv[i] = KorkApi::ConsoleValue();
+         return;
+      }
+      
+      if ((argv[i].typeId == KorkApi::ConsoleValue::TypeInternalString ||
+          argv[i].typeId >= KorkApi::ConsoleValue::TypeBeginCustom) &&
+          argv[i].zoneId != KorkApi::ConsoleValue::ZonePacked)
+      {
+         // Figure out storage required
+         U32 curOffset = (U32)mArgData.size();
+         U32 argSize = outStorage.data.size;
+         mArgData.resize(mArgData.size() + argSize);
+         
+         // Copy data to output
+         void* inData = outStorage.data.storageAddress.evaluatePtr(sVM->getAllocBase());
+         memcpy(&mArgData[curOffset], inData, argSize);
+         mArgData.push_back(0);
+         
+         // Assign type
+         mArgv[i] = KorkApi::ConsoleValue::makeRaw(curOffset, argv[i].typeId);
+      }
+      else
+      {
+         // Just directly copy
+         mArgv[i] = argv[i];
+      }
    }
 }
 
 SimConsoleEvent::~SimConsoleEvent()
 {
-   dFree(mArgv);
 }
 
 void SimConsoleEvent::process(SimObject* object)
 {
-// #ifdef DEBUG
-//    Con::printf("Executing schedule: %d", sequenceCount);
-// #endif
-    if(mOnObject)
-      Con::execute(object, mArgc, const_cast<const char**>( mArgv ));
+   // #ifdef DEBUG
+   //    Con::printf("Executing schedule: %d", sequenceCount);
+   // #endif
+   
+   // Unpack pointers
+   for (U32 i=0; i<mArgc; i++)
+   {
+      if ((mArgv[i].typeId == KorkApi::ConsoleValue::TypeInternalString ||
+           mArgv[i].typeId >= KorkApi::ConsoleValue::TypeBeginCustom) &&
+          mArgv[i].zoneId != KorkApi::ConsoleValue::ZonePacked)
+      {
+         mArgv[i].cvalue += (U64)mArgData.data();
+      }
+   }
+   
+   if(mOnObject)
+   {
+      Con::execute(object, mArgc, mArgv);
+   }
    else
    {
+      char* funcName = (char*)mArgv[0].evaluatePtr(sVM->getAllocBase());
+      
       // Grab the function name. If '::' doesn't exist, then the schedule is
       // on a global function.
-      char* func = dStrstr( mArgv[0], (char*)"::" );
-      if( func )
+      char* func = strstr(funcName, (char*)"::");
+      if (func)
       {
-         // Set the first colon to NULL, so we can reference the namespace.
+         // Set the first colon to nullptr, so we can reference the namespace.
          // This is okay because events are deleted immediately after
          // processing. Maybe a bad idea anyway?
          func[0] = '\0';
-
+         
          // Move the pointer forward to the function name.
          func += 2;
-
-#if TOFIX
-         // Lookup the namespace and function entry.
-         NamespaceId ns = sCon  Namespace::find( StringTable->insert( mArgv[0] ) );
-         if( ns )
+         
+         KorkApi::NamespaceId nsId = sVM->findNamespace(sVM->internString(funcName));
+         if (nsId != 0)
          {
-            Namespace::Entry* nse = ns->lookup( StringTable->insert( func ) );
-            if( nse )
-               // Execute.
-               nse->execute( mArgc, (const char**)mArgv, &gEvalState );
+            KorkApi::ConsoleValue localArgv[KorkApi::MaxArgs];
+            KorkApi::ConsoleValue::convertArgsReverse(mArgc, (const char**)mArgv, localArgv);
+            
+            KorkApi::ConsoleValue retV = KorkApi::ConsoleValue();
+            sVM->callNamespaceFunction(nsId, sVM->internString(func), mArgc, localArgv, retV);
          }
-#endif
       }
-
       else
-         Con::execute(mArgc, const_cast<const char**>( mArgv ));
+      {
+         KorkApi::ConsoleValue retV = KorkApi::ConsoleValue();
+         sVM->callNamespaceFunction(sVM->getGlobalNamespace(), sVM->internString(func), mArgc, mArgv, retV);
+      }
    }
 }
 
-// END T2D BLOCK
-
-//-----------------------------------------------------------------------------
-
-// BEGIN T2D BLOCK
-
-SimConsoleThreadExecCallback::SimConsoleThreadExecCallback() : retVal(NULL)
-{
-   sem = Semaphore::createSemaphore(0);
-}
-
-SimConsoleThreadExecCallback::~SimConsoleThreadExecCallback()
-{
-   Semaphore::destroySemaphore(sem);
-}
-
-void SimConsoleThreadExecCallback::handleCallback(const char *ret)
-{
-   retVal = ret;
-   Semaphore::releaseSemaphore(sem);
-}
-
-const char *SimConsoleThreadExecCallback::waitForResult()
-{
-   if(Semaphore::acquireSemaphore(sem, true))
-   {
-      return retVal;
-   }
-
-   return NULL;
-}
-
-//-----------------------------------------------------------------------------
-
-SimConsoleThreadExecEvent::SimConsoleThreadExecEvent(S32 argc, const char **argv, bool onObject, SimConsoleThreadExecCallback *callback) : 
-   SimConsoleEvent(argc, argv, onObject),
-   cb(callback)
-{
-}
-
-void SimConsoleThreadExecEvent::process(SimObject* object)
-{
-   const char *retVal;
-   if(mOnObject)
-      retVal = Con::execute(object, mArgc, const_cast<const char**>( mArgv ));
-   else
-      retVal = Con::execute(mArgc, const_cast<const char**>( mArgv ));
-
-   if(cb)
-      cb->handleCallback(retVal);
-}
-
-// END T2D BLOCK
 
 
 // BEGIN T2D BLOCK
@@ -3828,11 +3520,12 @@ ConsoleFunction( getSimTime, S32, 1, 1, "")
 //-----------------------------------------------------------------------------
 
 
-inline void SimSetIterator::Stack::push_back(SimSet* set)
+inline void SimSetIterator::push_back_stack(SimSet* set)
 {
-   increment();
-   last().set = set;
-   last().itr = set->begin();
+   Entry e;
+   e.set = set;
+   e.itr = set->begin();
+   stack.push_back(e);
 }
 
 
@@ -3840,55 +3533,52 @@ inline void SimSetIterator::Stack::push_back(SimSet* set)
 
 SimSetIterator::SimSetIterator(SimSet* set)
 {
-   VECTOR_SET_ASSOCIATION(stack);
-
    if (!set->empty())
-      stack.push_back(set);
+      push_back_stack(set);
 }
-
 
 //-----------------------------------------------------------------------------
 
 SimObject* SimSetIterator::operator++()
 {
    SimSet* set;
-   if ((set = dynamic_cast<SimSet*>(*stack.last().itr)) != 0) 
+   if ((set = dynamic_cast<SimSet*>(*stack.back().itr)) != 0) 
    {
       if (!set->empty()) 
       {
-         stack.push_back(set);
-         return *stack.last().itr;
+         push_back_stack(set);
+         return *stack.back().itr;
       }
    }
 
-   while (++stack.last().itr == stack.last().set->end()) 
+   while (++stack.back().itr == stack.back().set->end()) 
    {
       stack.pop_back();
       if (stack.empty())
          return 0;
    }
-   return *stack.last().itr;
+   return *stack.back().itr;
 }  
 
 SimObject* SimGroupIterator::operator++()
 {
    SimGroup* set;
-   if ((set = dynamic_cast<SimGroup*>(*stack.last().itr)) != 0) 
+   if ((set = dynamic_cast<SimGroup*>(*stack.back().itr)) != 0) 
    {
       if (!set->empty()) 
       {
-         stack.push_back(set);
-         return *stack.last().itr;
+         push_back_stack(set);
+         return *stack.back().itr;
       }
    }
 
-   while (++stack.last().itr == stack.last().set->end()) 
+   while (++stack.back().itr == stack.back().set->end()) 
    {
       stack.pop_back();
       if (stack.empty())
          return 0;
    }
-   return *stack.last().itr;
+   return *stack.back().itr;
 }  
 
 // END T2D BLOCK

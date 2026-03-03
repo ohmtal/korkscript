@@ -20,40 +20,70 @@
 // IN THE SOFTWARE.
 //-----------------------------------------------------------------------------
 
-#ifndef _TEMPALLOC_H_
-#define _TEMPALLOC_H_
+#ifndef _IDGENERATOR_H_
+#define _IDGENERATOR_H_
 
 #ifndef _PLATFORM_H_
-#  include "platform/platform.h"
+#include "platform/platform.h"
 #endif
+#include <vector>
 
-
-template< typename T >
-struct TempAlloc
+class IdGenerator
 {
-   T* ptr;
-   U32 size;
-
-   TempAlloc()
-      : size( 0 ), ptr( 0 ) {}
-   TempAlloc( U32 size )
-      : size( size )
-   {
-      ptr = ( T* ) dMalloc( size * sizeof( T ) );
-   }
-   ~TempAlloc()
-   {
-      if( ptr )
-         dFree( ptr );
-   }
-   operator T*()
-   {
-      return ptr;
-   }
-
 private:
-   // Not safe.
-   TempAlloc( const TempAlloc& ) {}
+   U32 mIdBlockBase;
+   U32 mIdRangeSize;
+   std::vector<U32> mPool;
+   U32 mNextId;
+
+   void reclaim();
+
+public:
+   IdGenerator(U32 base, U32 numIds)
+   {
+      mIdBlockBase = base;
+      mIdRangeSize = numIds;
+      mNextId = mIdBlockBase;
+   }
+
+   void reset()
+   {
+      mPool.clear();
+      mNextId = mIdBlockBase;
+   }
+
+   U32 alloc()
+   {
+      // fist check the pool:
+      if(!mPool.empty())
+      {
+         U32 id = mPool.back();
+         mPool.pop_back();
+         reclaim();
+         return id;
+      }
+      if(mIdRangeSize && mNextId >= mIdBlockBase + mIdRangeSize)
+         return 0;
+
+      return mNextId++;
+   }
+
+   void free(U32 id)
+   {
+      AssertFatal(id >= mIdBlockBase, "IdGenerator::alloc: invalid id, id does not belong to this IdGenerator.")
+      if(id == mNextId - 1)
+      {
+         mNextId--;
+         reclaim();
+      }
+      else
+         mPool.push_back(id);
+   }
+
+   U32 numIdsUsed()
+   {
+      return mNextId - mIdBlockBase - mPool.size();
+   }
 };
 
-#endif // _TEMPALLOC_H_
+#endif

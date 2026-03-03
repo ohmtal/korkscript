@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <stdlib.h>
 #include <algorithm>
+#include <climits>
 
 //------------------------------------------------------------------------------
 //-------------------------------------- Basic Types...
@@ -139,10 +140,6 @@ struct FileTime
 };
 #else
 typedef U64 FileTime;
-#endif
-
-#ifndef NULL
-#  define NULL 0
 #endif
 
 //--------------------------------------

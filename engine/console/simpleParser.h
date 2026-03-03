@@ -1,13 +1,22 @@
 #pragma once
+//-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
 #include <vector>
 #include <stdexcept>
 #include <string>
-#include "core/stringTable.h"
+#include <sstream>
 
 namespace Compiler
 {
 struct Resources;
 }
+
+// NOTE: needs Vector and String type set in SimpleParser namespace
 
 namespace SimpleParser
 {
@@ -23,7 +32,7 @@ public:
    mExpected(expected) {}
    
    TokenError(const TOK& tok, TT expected, std::string_view msg)
-   : TokenError(tok, expected, std::string(msg).c_str()) {}
+   : TokenError(tok, expected, String(msg).c_str()) {}
    
    const TOK& token()    const noexcept { return mToken; }
    TT    expected() const noexcept { return mExpected; }
@@ -33,13 +42,23 @@ private:
    TT mExpected;
 };
 
-class ASTGen
+template<class I> class ASTGen
 {
 public:
    
-   ASTGen(SimpleLexer::Tokenizer* tok, Compiler::Resources* res)
+   ASTGen(SimpleLexer::Tokenizer<I>* tok, Compiler::Resources* res)
    : mTokenizer(tok), mTokenPos(0), mResources(res)
    {
+      res->currentASTGen = this;
+      mErrorToken = TOK();
+   }
+
+   ~ASTGen()
+   {
+      if (mResources && mResources->currentASTGen == this)
+      {
+         mResources->currentASTGen = nullptr;
+      }
    }
    
    bool processTokens()
@@ -52,6 +71,7 @@ public:
       
       if (t.isIllegal() || t.isNone())
       {
+         mErrorToken = t;
          mTokens.clear();
          return false;
       }
@@ -59,14 +79,25 @@ public:
       return true;
    }
    
+   void emitTokens(std::stringbuf& buf)
+   {
+      std::ostream os(&buf);
+      for (U32 i=0; i<mTokens.size(); i++)
+      {
+         os << "\n";
+         os << mTokenizer->toString(mTokens[i]);
+      }
+   }
+   
    // start : decl_list ;
    StmtNode* parseProgram()
    {
-      StmtNode* list = NULL;
+      StmtNode* list = nullptr;
+      mResources->pushLocalVarContext();
       while (!atEnd())
       {
          StmtNode* d = parseDecl();
-         if (list == NULL)
+         if (list == nullptr)
          {
             list = d;
          }
@@ -75,13 +106,17 @@ public:
             list->append(d);
          }
       }
+      mResources->popLocalVarContext();
       return list;
    }
    
+public:
+   TOK mErrorToken;
+   
 private:
    
-   SimpleLexer::Tokenizer* mTokenizer;
-   std::vector<TOK> mTokens;
+   SimpleLexer::Tokenizer<I>* mTokenizer;
+   Vector<TOK> mTokens;
    U64 mTokenPos;
    Compiler::Resources* mResources;
    
@@ -98,16 +133,22 @@ private:
       return LA().kind == TT::END;
    }
    
-   bool match(TT t, S32* lineNo = NULL)
+   bool match(TT t, S32* lineNo = nullptr)
    {
       if (LA().kind == t) { if (lineNo) *lineNo = LA().pos.line; ++mTokenPos; return true; }
       return false;
    }
    
-   bool matchChar(char c, S32* lineNo = NULL)
+   bool matchChar(char c, S32* lineNo = nullptr)
    {
       if (LA().kind == TT::opCHAR && LA().ivalue == c) { if (lineNo) *lineNo = LA().pos.line; ++mTokenPos; return true; }
       return false;
+   }
+
+   U32 LAChar(size_t k = 0) const
+   {
+      TOK laTok = LA(k);
+      return (laTok.kind == TT::opCHAR) ? laTok.ivalue : 0;
    }
    
    TOK expect(TT t, const char* what)
@@ -115,6 +156,15 @@ private:
       if (LA().kind != t)
       {
          throw TokenError(LA(), t, what);
+      }
+      return mTokens[mTokenPos++];
+   }
+   
+   TOK expectEither(TT a, TT b, const char* what)
+   {
+      if (!(LA().kind == a || LA().kind == b))
+      {
+         throw TokenError(LA(), a, what);
       }
       return mTokens[mTokenPos++];
    }
@@ -128,7 +178,7 @@ private:
       return mTokens[mTokenPos++];
    }
    
-   void errorHere(const TOK& tok, std::string msg)
+   void errorHere(const TOK& tok, String msg)
    {
       throw TokenError(tok, TT::NONE, msg);
    }
@@ -213,8 +263,8 @@ private:
    // statement_list : (empty) | statement_list stmt
    StmtNode* parseStmtNodeListUntilSC()
    {
-      StmtNode* listHead = NULL;
-      StmtNode* listTail = NULL;
+      StmtNode* listHead = nullptr;
+      StmtNode* listTail = nullptr;
       while (!atEnd() && !(LA().kind == TT::opCHAR && LA().ivalue == '}'))
       {
          StmtNode* s = parseStmtNode();
@@ -231,6 +281,28 @@ private:
       }
       return listHead;
    }
+
+   VarNode* parseTypedVar(TOK v)
+   {
+      StringTableEntry assignTypeName = nullptr;
+
+      if (matchChar(':')) // is typed var
+      {
+         if (!mResources->allowTypes)
+         {
+            errorHere(LA(), "types not enabled");
+            return nullptr;
+         }
+         TOK typeNameTok = expect(TT::IDENT, "expected type name");
+         assignTypeName = typeNameTok.stString;
+      }
+      else if (LAChar() == '[') // array; types not allowed here
+      {
+         return nullptr;
+      }
+
+      return VarNode::alloc(mResources, v.pos.line, v.stString, nullptr, assignTypeName);
+   }
    
    // Handles var lists
    // (basically a restricted form of parseExprListOptUntil)
@@ -241,18 +313,18 @@ private:
    {
       // Handle empty
       if (LA().kind == TT::opCHAR && LA().ivalue == ')')
-         return NULL;
+         return nullptr;
       
       // First var
       TOK v = expect(TT::VAR, "parameter name expected");
-      VarNode* head = VarNode::alloc(mResources, v.pos.line, v.stString, NULL);
+      VarNode* head = parseTypedVar(v);
       VarNode* tail = head;
       
       // Subsequent vars
       while (matchChar(','))
       {
          TOK t = expect(TT::VAR, "parameter name expected");
-         VarNode* nxt = VarNode::alloc(mResources, t.pos.line, t.stString, NULL);
+         VarNode* nxt = parseTypedVar(t);
          tail->append(nxt);
          tail = nxt;
       }
@@ -268,7 +340,7 @@ private:
    {
       // Handle empty
       if (LA().kind == TT::opCHAR && LA().asChar() == endCh)
-         return NULL;
+         return nullptr;
       
       // head
       ExprNode* head = parseExprNode();
@@ -294,7 +366,7 @@ private:
       ExprNode* cond = parseExprNode();
       expectChar(')', "')' expected");
       StmtNode* thenS = parseStmtOrBlock();
-      StmtNode* elseS = NULL;
+      StmtNode* elseS = nullptr;
       if (match(TT::rwELSE))
       {
          elseS = parseStmtOrBlock();
@@ -310,7 +382,7 @@ private:
       if (!mResources->allowExceptions)
       {
          errorHere(LA(), "Exceptions disabled");
-         return NULL;
+         return nullptr;
       }
       
       TOK tryTok = expect(TT::rwTRY, "'try' expected");
@@ -319,7 +391,7 @@ private:
       if (!catchChain)
       {
          errorHere(LA(), "Expected one or more catch blocks");
-         return NULL;
+         return nullptr;
       }
       
       TryStmtNode* tryStmt = TryStmtNode::alloc(mResources, tryTok.pos.line, tryBlock, catchChain);
@@ -331,8 +403,8 @@ private:
    // catch_chain: catch_block | catch_block catch_chain
    CatchStmtNode* parseCatchChain()
    {
-      CatchStmtNode* startNode = NULL;
-      CatchStmtNode* tailNode = NULL;
+      CatchStmtNode* startNode = nullptr;
+      CatchStmtNode* tailNode = nullptr;
       S32 catchLineNo = 0;
       
       while (match(TT::rwCATCH, &catchLineNo))
@@ -344,7 +416,7 @@ private:
          if (!condBlock)
          {
             errorHere(LA(), "Expected {...}");
-            return NULL;
+            return nullptr;
          }
          
          // NOTE: Should be in definition order despite the stack implying otherwise,
@@ -377,7 +449,7 @@ private:
          ExprNode* test = parseExprNode();
          expectChar(')', "')' expected");
          StmtNode* body = parseStmtOrBlock();
-         return LoopStmtNode::alloc(mResources, wTok.pos.line, NULL, test, NULL, body, false);
+         return LoopStmtNode::alloc(mResources, wTok.pos.line, nullptr, test, nullptr, body, false);
       }
       else
       {
@@ -388,7 +460,7 @@ private:
          ExprNode* test = parseExprNode();
          expectChar(')', "')' expected");
          expectChar(';', "';' expected");
-         return LoopStmtNode::alloc(mResources, dTok.pos.line, NULL, test, NULL, body, true);
+         return LoopStmtNode::alloc(mResources, dTok.pos.line, nullptr, test, nullptr, body, true);
       }
    }
    
@@ -402,19 +474,19 @@ private:
       expectChar('(', "'(' expected");
       
       // init ;
-      ExprNode* init = NULL;
+      ExprNode* init = nullptr;
       if (!(LA().kind == TT::opCHAR && LA().ivalue == ';'))
          init = parseExprNode();
       expectChar(';', "';' expected");
       
       // test ;
-      ExprNode* test = NULL;
+      ExprNode* test = nullptr;
       if (!(LA().kind == TT::opCHAR && LA().ivalue == ';'))
          test = parseExprNode();
       expectChar(';', "';' expected");
       
       // end )
-      ExprNode* end = NULL;
+      ExprNode* end = nullptr;
       if (!(LA().kind == TT::opCHAR && LA().ivalue == ')'))
          end = parseExprNode();
       expectChar(')', "')' expected");
@@ -477,8 +549,8 @@ private:
    // Parse the case body (statement_list) until we hit 'case', 'default' or '}'
    StmtNode* parseCaseBody()
    {
-      StmtNode* head = NULL;
-      StmtNode* tail = NULL;
+      StmtNode* head = nullptr;
+      StmtNode* tail = nullptr;
       
       while (!atEnd())
       {
@@ -528,7 +600,7 @@ private:
       }
       
       // CASE ... ':' stmts
-      return IfStmtNode::alloc(mResources, caseTok.pos.line, list, body, NULL, false);
+      return IfStmtNode::alloc(mResources, caseTok.pos.line, list, body, nullptr, false);
    }
    
    // Handles switch statement
@@ -582,63 +654,85 @@ private:
       // or typed:              TYPEIDENT IDENT '=' expr ';'
       // or array variants:     IDENT '[' ... ']' '=' expr ';' (and typed variant)
       //
+      // NOTE: in KorkScript we instead use the following for types:
+      // IDENT : IDENT = expr;
+      // IDENT '[' ... ']' : IDENT = expr;
+      //
       // We conservatively say "yes" if after one (or two) idents we find '=' or '['.
       const TOK& n1 = LA(1);
-      if (n1.kind == K::opCHAR && (n1.asChar() == '=' || n1.asChar() == '[')) return true;
+      if (n1.kind == K::opCHAR && (n1.asChar() == '=' || n1.asChar() == '[' ||
+                                   n1.asChar() == ':')) // TYPED variable extension
+      {
+         return true;
+      }
       
       // typed form: IDENT IDENT <'='|'['> ...
-      if (n1.kind == K::IDENT) {
+      // KorkScript: this doesnt seem to be used in normal scripts, so we're ditching it to simplify
+      /*if (n1.kind == K::IDENT)
+      {
          const TOK& n2 = LA(2);
-         if (n2.kind == K::opCHAR && (n2.asChar() == '=' || n2.asChar() == '[')) return true;
-      }
+         if (n2.kind == K::opCHAR && (n2.asChar() == '=' || n2.asChar() == '[')) 
+         {
+            return true;
+         }
+      }*/
+      
       return false;
    }
    
-   // Handles obj.foo = expr;
-   //
+   // Handles 
+   //   foo = expr;
+   // Inside an object decl.
    //
    SlotAssignNode* parseSlotAssign(ExprNode* object)
    {
       using K = TT;
       
       S32 line = LA().pos.line;
-      U32 typeID = (U32)-1;
       StringTableEntry slotName = 0;
-      ExprNode* aidx = NULL;
-      
-      // Special case: datablock is a keyword
-      if (LA().kind == K::rwDATABLOCK)
-      {
-         // rwDATABLOCK '=' expr ';'
-         TOK kw = mTokens[mTokenPos++];  // 'datablock'
-         expectChar('=', "= expected");
-         ExprNode* rhs = parseExprNode();
-         expectChar(';', "; expected");
-         
-         slotName = mTokenizer->mStringTable->insert("datablock");
-         return SlotAssignNode::alloc(mResources, line, object, aidx, slotName, rhs, typeID);
-      }
+      StringTableEntry typeName = nullptr;
+      ExprNode* aidx = nullptr;
       
       // IDENT ... (maybe typed)
-      // First token could be either TYPEIDENT (treated as IDENT by our lexer) or the slot name.
-      TOK first = expect(K::IDENT, "identifier expected");
-      
-      // NOTE: for now ignoring typed fields
-      slotName = first.stString;
-      
+      // DATABLOCK ... (maybe typed)
+      TOK startToken = expectEither(K::rwDATABLOCK, K::IDENT, "ident or 'datablock' expected");
+      if (startToken.kind == K::rwDATABLOCK)
+      {
+         slotName = mTokenizer->mStringIntern.intern("datablock");
+      }
+      else
+      {
+         // NOTE: for now ignoring typed fields
+         slotName = startToken.stString;
+      }
+
       // Optional '[' aidx_expr ']'
       if (matchChar('['))
       {
          aidx = parseAidxExprNode();  // you already have this
          expectChar(']', "] expected");
       }
+
+      // Type name
+      if (matchChar(':'))
+      {
+         if (!mResources->allowTypes)
+         {
+            errorHere(LA(), "Types not enabled");
+            return nullptr;
+         }
+
+         TOK typeNameTok = expect(TT::IDENT, "type name expected");
+         typeName = typeNameTok.stString;
+      }
       
       // '=' expr ';'
       expectChar('=', "= expected");
       ExprNode* rhs = parseExprNode();
+      rhs = handleExpressionTuples(rhs, true); // handle tuple expr after
       expectChar(';', "; expected");
       
-      return SlotAssignNode::alloc(mResources, line, object, aidx, slotName, rhs, typeID);
+      return SlotAssignNode::alloc(mResources, line, object, aidx, slotName, rhs, typeName);
    }
    
    // Handles list of slot_asign ending with '}'
@@ -646,8 +740,8 @@ private:
    // slot_assign_list : slot_assign | slot_assign_list slot_assign
    SlotAssignNode* parseSlotAssignList(ExprNode* objectNode)
    {
-      SlotAssignNode* head = NULL;
-      SlotAssignNode* tail = NULL;
+      SlotAssignNode* head = nullptr;
+      SlotAssignNode* tail = nullptr;
       
       while (!atEnd())
       {
@@ -672,7 +766,7 @@ private:
    {
       // empty if we’re right before '}'
       if (LA().kind == TT::opCHAR && LA().asChar() == '}')
-         return NULL;
+         return nullptr;
       
       return parseSlotAssignList(object);
    }
@@ -713,8 +807,8 @@ private:
       // class_name_expr ( [ object_name ] parent_block object_args )     (object_name becomes internal name)
       
       expectChar('(', "'(' expected");
-      ExprNode* objectNameExpr = NULL;
-      ExprNode* argList = NULL;
+      ExprNode* objectNameExpr = nullptr;
+      ExprNode* argList = nullptr;
       StringTableEntry parentObject = 0;
       bool isInternal = false;
       
@@ -722,7 +816,6 @@ private:
       {
          if (matchChar('['))
          {
-            mTokenPos++;
             objectNameExpr = parseExprNode();
             expectChar(']', "need closing ] on object name");
             isInternal = true;
@@ -738,13 +831,13 @@ private:
          }
          
          // args
-         argList = matchChar(',') ? parseExprListOptUntil(')') : NULL;
+         argList = matchChar(',') ? parseExprListOptUntil(')') : nullptr;
          
          expectChar(')', "')' expected");
       }
       
       // If no object name, alloc ""
-      if (objectNameExpr == NULL)
+      if (objectNameExpr == nullptr)
       {
          char empty[1];
          empty[0] = '\0';
@@ -752,16 +845,16 @@ private:
       }
       
       // Optional { slots }
-      SlotAssignNode* slots = NULL;
-      ObjectDeclNode* subs = NULL;
+      SlotAssignNode* slots = nullptr;
+      ObjectDeclNode* subs = nullptr;
       if (matchChar('{'))
       {
-         // 1) slots first (relative to this object; pass NULL handles correctly on compile)
-         slots = parseSlotAssignListOpt(/*curObjExpr*/NULL);
+         // 1) slots first (relative to this object; pass nullptr handles correctly on compile)
+         slots = parseSlotAssignListOpt(/*curObjExpr*/nullptr);
          
          // 2) then nested objects (zero or more)
-         ObjectDeclNode* head = NULL;
-         ObjectDeclNode* tail = NULL;
+         ObjectDeclNode* head = nullptr;
+         ObjectDeclNode* tail = nullptr;
          
          while (beginsObjectDecl())
          {
@@ -813,13 +906,13 @@ private:
    StmtNode* parseDatablockDecl()
    {
       S32 line = LA().pos.line;
-      StringTableEntry parentObject = NULL;
+      StringTableEntry parentObject = nullptr;
       expect(TT::rwDATABLOCK, "datablock expected");
       
       // class_name_expr
       TOK startToken = LA();
       ExprNode* klassNameNode = parseClassNameExpr();
-      if (klassNameNode == NULL)
+      if (klassNameNode == nullptr)
       {
          errorHere(startToken, "class name expression expected");
       }
@@ -834,13 +927,13 @@ private:
       }
       expectChar(')', "')' expected");
       
-      SlotAssignNode* slotAssignNode = NULL;
+      SlotAssignNode* slotAssignNode = nullptr;
       expectChar('{', "{ expected for datablock");
-      slotAssignNode = parseSlotAssignListOpt(NULL);
+      slotAssignNode = parseSlotAssignListOpt(nullptr);
       expectChar('}', "} expected");
       expectChar(';', "; expected");
       
-      return ObjectDeclNode::alloc(mResources, line, klassNameNode, nameExpr, NULL, parentObject, slotAssignNode, NULL, /*isDatablock*/true, /*isSingleton*/false, /*isNewExpr*/false);
+      return ObjectDeclNode::alloc(mResources, line, klassNameNode, nameExpr, nullptr, parentObject, slotAssignNode, nullptr, /*isDatablock*/true, /*isSingleton*/false, /*isNewExpr*/false);
    }
    
    // Handles function definitions such as function foo(...) { ... }
@@ -862,15 +955,28 @@ private:
          fn = b.stString;  // second is function name
       }
       
+      mResources->pushLocalVarContext();
+      
       // ( ... )
       expectChar('(', "'(' expected");
       VarNode* args = parseVarList();
       expectChar(')', "')' expected");
+
+      // Type decl (optional)
+      StringTableEntry retTypeName = nullptr;
+      if (matchChar(':'))
+      {
+         auto typeTok = expect(SimpleLexer::TokenType::IDENT, "return type expected");
+         retTypeName = typeTok.stString;
+      }
       
       // { ... }
       StmtNode* body = parseBlockStmt();
       
-      return FunctionDeclStmtNode::alloc(mResources, line ? line : a.pos.line, fn, ns, args, body);
+      FunctionDeclStmtNode* stmt = FunctionDeclStmtNode::alloc(mResources, line ? line : a.pos.line, fn, ns, args, body, retTypeName);
+      mResources->popLocalVarContext();
+      
+      return stmt;
    }
    
    // Handles a list of function definitions
@@ -900,7 +1006,7 @@ private:
       TOK nameTok = expect(TT::IDENT, "package name expected");
       
       expectChar('{', "'{' expected");
-      StmtNode* fns = NULL;
+      StmtNode* fns = nullptr;
       if (!(LA().kind == TT::opCHAR && LA().ivalue == '}'))
       {
          fns = parseFnDeclList();
@@ -975,7 +1081,7 @@ private:
                expectChar(';', "; expected");
                return ReturnStmtNode::alloc(mResources, (S32)tok.pos.line, e);
             }
-            return ReturnStmtNode::alloc(mResources, (S32)tok.pos.line, NULL);
+            return ReturnStmtNode::alloc(mResources, (S32)tok.pos.line, nullptr);
          }
          case TT::rwASSERT:
             return parseAssertStmt();
@@ -984,6 +1090,41 @@ private:
             TOK tok = mTokens[mTokenPos++];
             return StrConstNode::alloc(mResources, tok.pos.line, mTokenizer->bufferAtOffset(tok.stringValue.offset), false, true, tok.stringValue.len);
          }
+
+         // NOTE: in effect this allows:
+         //   %var : type = expr
+         //   %var[expr]
+         // If there is a typed expression without an assignment, this will only set the type hint 
+         // for the variable name. Typed array accessors are not permitted.
+         // ALSO: %var.slot : type is not allowed here; instead thats handled by parseSlotAssign.
+         case TT::VAR: {
+
+            ExprNode* firstExpr = nullptr;
+            
+            if (mResources->allowTypes)
+            {
+               mTokenPos++; // NEXT token
+               VarNode* node = parseTypedVar(t); // NOTE: parses the initial %var and optional type (IGNORES arrays)
+               if (node == nullptr)
+               {
+                  mTokenPos--; // rewind; something went wrong
+               }
+               firstExpr = node ? parseExpressionFrom(node) : parseExpression(0); // should end up with an assignment
+               firstExpr = handleExpressionTuples(firstExpr);
+            }
+            else
+            {
+               firstExpr = parseStmtNodeExprNode();
+            }
+
+            // 
+            
+            // Finally ends with ;
+            expectChar(';', "; expected");
+            return firstExpr;
+         }
+
+         // NOTE: handles expressions which dont start with VAR
          default: {
             // expression_stmt ';'
             ExprNode*  e = parseStmtNodeExprNode();
@@ -991,6 +1132,90 @@ private:
             return e;
          }
       }
+   }
+
+   bool verifyTupleAssignment(TOK rootTok, BaseAssignExprNode* root)
+   {
+      for (BaseAssignExprNode* sn = root; sn; sn = sn->nextAssign())
+      {
+         SlotAssignNode* slotExpr = dynamic_cast<SlotAssignNode*>(sn);
+         AssignExprNode* assignExpr = dynamic_cast<AssignExprNode*>(sn);
+
+         if (slotExpr == nullptr && assignExpr == nullptr)
+         {
+            errorHere(rootTok, "tuples cannot use math operators");
+            return false;
+         }
+      }
+
+      return true;
+   }
+
+   // Handles case where statement may be a tuple
+   ExprNode* handleExpressionTuples(ExprNode* firstExpr, bool isSlotAssign=false)
+   {
+      TOK firstToken = LA();
+
+      // Additional items get appended onto the root expr; if this needs  
+      // to be a list that will get handled there.
+      if (LAChar(0) == ',')
+      {
+         if (!mResources->allowTuples)
+         {
+            errorHere(LA(), "tuples not enabled");
+            return nullptr;
+         }
+
+         // NOTE: in this case we allow:
+         // %var : type, %var2 : type ...
+         // %var : type = 1, 2, 3;
+         // %var : type = %otherVar = 1,2,3;
+         //
+         // In the assign case, everything gets assigned to the
+         // ALSO: all dependent assigns will get assigned the type at the root.
+         BaseAssignExprNode* firstAssign = firstExpr->asAssign();
+         BaseAssignExprNode* lastAssign = firstAssign ? firstAssign->findDeepestAssign() : nullptr;
+         TupleExprNode* tupleExpr = TupleExprNode::alloc(mResources, firstAssign ? firstAssign->dbgLineNumber : firstExpr->dbgLineNumber, firstExpr);
+
+         if (lastAssign)
+         {
+            if (!verifyTupleAssignment(firstToken, firstAssign))
+            {
+               return nullptr;
+            }
+
+            // Replace RHS of last assignment with the tuple
+            tupleExpr->items = lastAssign->rhsExpr;
+            lastAssign->rhsExpr = tupleExpr;
+            
+            // %var = ... case
+            while (matchChar(','))
+            {
+               ExprNode* nextExpr = parseExpression(0);
+
+               if (nextExpr)
+               {
+                  tupleExpr->items->append(nextExpr);
+               }
+            }
+         }
+         else
+         {
+            // list of expressions; emit a distinct tuple
+            while (matchChar(','))
+            {
+               VarNode* nextVar = isSlotAssign ? nullptr : parseTypedVar(LA());
+               ExprNode* nextExpr = nextVar ? parseExpressionFrom(nextVar) : parseExpression(0);
+               if (nextExpr)
+               {
+                  tupleExpr->items->append(nextExpr);
+               }
+            }
+            firstExpr = tupleExpr;
+         }
+      }
+
+      return firstExpr;
    }
    
    // Handles assert expression
@@ -1002,7 +1227,7 @@ private:
       expectChar('(', "'(' expected after assert");
       
       ExprNode* cond = parseExprNode();
-      const char* msg  = NULL;
+      const char* msg  = nullptr;
       
       if (matchChar(','))
       {
@@ -1115,6 +1340,13 @@ private:
    {
       // prefix / primary
       TOK t = mTokens[mTokenPos++];
+      
+      // Skip begin string
+      if (t.kind == TT::STRBEG)
+      {
+         t = mTokens[mTokenPos++];
+      }
+      
       ExprNode* left = nud(t);
       
       // infix / postfix loop
@@ -1131,6 +1363,21 @@ private:
       
       return left;
    }
+
+   ExprNode* parseExpressionFrom(ExprNode* left, int rbp = 0)
+   {
+       for (;;)
+       {
+           const TOK& next = LA();
+           int bp = lbp(next);
+           if (bp <= rbp)
+               break;
+
+           TOK op = mTokens[mTokenPos++];
+           left = led(op, left, bp);
+       }
+       return left;
+   }
    
    // Assignments (right-assoc). Only supported to VAR targets here.
    inline ExprNode* parseAssignRHS(int bp)
@@ -1139,13 +1386,16 @@ private:
    }
    
    // Compound assigns map to AssignOpExprNode; '=' to AssignExprNode.
+   // NOTE: to keep things simple, this DOES NOT factor in types; 
+   // they are not allowed within expressions 
+   // (besides the start which is handled in parseStmtNode).
    ExprNode* makeAssign(const TOK& tok, ExprNode* l, ExprNode* r)
    {
       if (VarNode* v = dynamic_cast<VarNode*>(l))
       {
          if (tok.kind == TT::opCHAR && tok.asChar() == '=')
          {
-            return AssignExprNode::alloc(mResources, tok.pos.line, v->varName, v->arrayIndex, r);            // =
+            return AssignExprNode::alloc(mResources, tok.pos.line, v->varName, v->arrayIndex, r, v->varType);            // =
          }
          // all op*ASN kinds go through AssignOpExprNode with tok.kind payload
          return AssignOpExprNode::alloc(mResources, tok.pos.line, v->varName, v->arrayIndex, r, processCharOp(TOK(tok)));
@@ -1159,7 +1409,7 @@ private:
          return SlotAssignOpNode::alloc(mResources, tok.pos.line, s->objectExpr, s->slotName, s->arrayExpr, processCharOp(TOK(tok)), r);
       }
       errorHere(tok, "left-hand side of assignment must be a variable");
-      return NULL;
+      return nullptr;
    }
    
    // Handles postfix expressions
@@ -1185,7 +1435,7 @@ private:
                }
                // Generic slot/object indexing not implemented here.
                errorHere(op, "indexing allowed only on variables at this point");
-               return NULL;
+               return nullptr;
             }
             
             // Ternary ?:  (right-assoc)
@@ -1240,7 +1490,7 @@ private:
                }
                
                // Slot access: .IDENT [ '[' aidx ']' ]   -> SlotAccessNode
-               ExprNode* arr = NULL;
+               ExprNode* arr = nullptr;
                if (matchChar('[')) {
                   arr = parseAidxExprNode();
                   expectChar(']', "] expected");
@@ -1289,7 +1539,7 @@ private:
                return SlotAssignOpNode::alloc(mResources, op.pos.line, s->objectExpr, s->slotName, s->arrayExpr, asn, one);
             }
             errorHere(op, "postfix ++/-- requires a variable");
-            return NULL;
+            return nullptr;
          }
             
             // Logical / bitwise / arithmetic / shift / eq / rel / concat family
@@ -1330,7 +1580,7 @@ private:
       }
       
       errorHere(op, "unsupported operator in expression");
-      return NULL;
+      return nullptr;
    }
    
    // Handles prefix expressions
@@ -1342,6 +1592,7 @@ private:
             // Literals
          case TT::INTCONST:   return IntNode::alloc(mResources, t.pos.line, (S32)t.ivalue);
          case TT::FLTCONST:   return FloatNode::alloc(mResources, t.pos.line, t.value);
+         case TT::STREND:
          case TT::STRATOM:    return StrConstNode::alloc(mResources, t.pos.line, mTokenizer->bufferAtOffset(t.stringValue.offset), false);
          case TT::TAGATOM:    return StrConstNode::alloc(mResources, t.pos.line, mTokenizer->bufferAtOffset(t.stringValue.offset), true);
          case TT::DOCBLOCK:   return StrConstNode::alloc(mResources, t.pos.line, mTokenizer->bufferAtOffset(t.stringValue.offset), false, true, t.stringValue.len);
@@ -1351,7 +1602,7 @@ private:
          {
             //ExprNode* target = parseExpression(110);
             errorHere(t, "prefix ++/-- not supported");
-            return NULL;
+            return nullptr;
          }
             
             // Names
@@ -1381,7 +1632,7 @@ private:
             // bare name
             return ConstantNode::alloc(mResources, t.pos.line, t.stString);
          }
-         case TT::VAR:        return VarNode::alloc(mResources, t.pos.line, t.stString, NULL);
+         case TT::VAR:        return VarNode::alloc(mResources, t.pos.line, t.stString, nullptr);
             
          case TT::rwDECLARE:           // 'new'
          case TT::rwDECLARESINGLETON:  // 'singleton'
@@ -1412,7 +1663,7 @@ private:
       }
       
       errorHere(t, "unexpected token in expression");
-      return NULL;
+      return nullptr;
    }
 };
 

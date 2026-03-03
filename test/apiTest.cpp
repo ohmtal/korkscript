@@ -1,9 +1,4 @@
 #include "platform/platform.h"
-#include "console/simpleLexer.h"
-#include "console/ast.h"
-#include "console/compiler.h"
-#include "console/simpleParser.h"
-#include "core/fileStream.h"
 #include <stdio.h>
 #include <unordered_map>
 #include "embed/api.h"
@@ -20,37 +15,37 @@ void MyLogger(U32 level, const char *consoleLine, void* userPtr)
    printf("%s\n", consoleLine);
 }
 
-
+Vm* gVM = nullptr;
 static std::unordered_map<StringTableEntry, VMObject*> gByName;
 static std::unordered_map<U32, VMObject*> gById;
 static KorkApi::SimObjectId gCurrentId = 1;
 
 static VMObject* FindByName(void* userPtr, StringTableEntry name, VMObject* parent)
 {
-   if (!name) return NULL;
+   if (!name) return nullptr;
    auto it = gByName.find(name);
-   return it == gByName.end() ? NULL : it->second;
+   return it == gByName.end() ? nullptr : it->second;
 }
 
 static VMObject* FindById(void* userPtr, KorkApi::SimObjectId ident)
 {
    auto it = gById.find(ident);
-   return it == gById.end() ? NULL : it->second;
+   return it == gById.end() ? nullptr : it->second;
 }
 
 static VMObject* FindByPath(void* userPtr, const char* path)
 {
-   if (!path) return NULL;
+   if (!path) return nullptr;
    
    if (path[0] >= '0' && path[0] < '9')
    {
       auto numIt = gById.find(atoi(path));
-      return numIt == gById.end() ? NULL : numIt->second;
+      return numIt == gById.end() ? nullptr : numIt->second;
    }
    else
    {
-      auto it = gByName.find(StringTable->insert(path));
-      return it == gByName.end() ? NULL : it->second;
+      auto it = gByName.find(gVM->internString(path));
+      return it == gByName.end() ? nullptr : it->second;
    }
 }
 
@@ -63,80 +58,112 @@ struct MyPoint3F
    F32 x,y,z;
 };
 
-static void MyPoint3F_SetValue(void*, 
-                               KorkApi::Vm* vm,
-                               void* dptr,
-                              S32 argc, ConsoleValue* argv,
-                              const EnumTable*, 
-                              BitSet32,
-                              U32 typeId) {
-   MyPoint3F* p = reinterpret_cast<MyPoint3F*>(dptr);
-   if (!p)
-      return;
-   
-   if (argc >= 3) 
-   {
-      p->x = vm->valueAsFloat(argv[0]);
-      p->y = vm->valueAsFloat(argv[1]);
-      p->z = vm->valueAsFloat(argv[2]);
-   } 
-   else if (argc == 1) 
-   {
-      if (argv[0].typeId == typeId)
-      {
-         *p = *((MyPoint3F*)(argv[0].evaluatePtr(vm->getAllocBase())));
-      }
-      else if (argv[0].typeId == KorkApi::ConsoleValue::TypeInternalString)
-      {
-         *p = {};
-         const char* inputStr = (const char*)(argv[0].evaluatePtr(vm->getAllocBase()));
-         sscanf(inputStr, "%f %f %f", &p->x, &p->y, &p->z);
-      }
-      else
-      {
-         *((MyPoint3F*)dptr) = {};
-      }
-   }
+S32 gMyPoint3FTypeID = -1;
+
+// Hack until we define these properly in the API
+namespace KorkApi
+{
+TypeStorageInterface CreateRegisterStorageFromArgs(KorkApi::VmInternal* vmInternal, U32 argc, KorkApi::ConsoleValue* argv);
 }
 
-static ConsoleValue MyPoint3F_CopyData(void* userPtr,
-                         KorkApi::Vm* vm,
-                         void* sptr,
-                         const EnumTable* tbl,
-                         BitSet32 flag,
-                         U32 requestedType,
-                         U32 requestedZone) {
-   static char buf[96];
-   MyPoint3F* pt = reinterpret_cast<MyPoint3F*>(sptr);
-   ConsoleValue cv;
-   U32 realRequestedType = requestedZone & KorkApi::TypeDirectCopyMask;
+static bool MyPoint3F_CastValue(void*,
+                               KorkApi::Vm* vm,
+                               KorkApi::TypeStorageInterface* inputStorage,
+                               KorkApi::TypeStorageInterface* outputStorage,
+                              void* fieldUserPtr,
+                              BitSet32 flag,
+                              U32 typeId)
+{
+   const KorkApi::ConsoleValue* argv = nullptr;
+   U32 argc = inputStorage ? inputStorage->data.argc : 0;
+   bool directLoad = false;
 
-   if (realRequestedType == KorkApi::ConsoleValue::TypeInternalString)
+   if (argc > 0 && inputStorage->data.storageRegister)
    {
-      char* destPtr = buf;
-      
-      if (requestedZone != KorkApi::ConsoleValue::ZoneExternal)
+      argv = inputStorage->data.storageRegister;
+   }
+   else
+   {
+      argc = 1;
+      argv = &inputStorage->data.storageAddress;
+      directLoad = true;
+   }
+
+   MyPoint3F v = {0, 0, 0};
+
+   if (inputStorage->isField && directLoad)
+   {
+      const MyPoint3F* src = (const MyPoint3F*)inputStorage->data.storageAddress.evaluatePtr(vm->getAllocBase());
+      if (!src) return false;
+      v = *src;
+   }
+   else
+   {
+      if (argc == 3)
       {
-         cv = vm->getStringInZone(requestedZone, 256);
-         if (cv.isNull())
-         {
-            return cv;
-         }
+         v.x = (F32)argv[0].getFloat((F64)argv[0].getInt(0));
+         v.y = (F32)argv[1].getFloat((F64)argv[1].getInt(0));
+         v.z = (F32)argv[2].getFloat((F64)argv[2].getInt(0));
+      }
+      else if (argc == 1)
+      {
+         const char* s = vm->valueAsString(argv[0]);
+         if (!s) s = "";
+
+         sscanf(s, "%g %g %g", &v.x, &v.y, &v.z);
       }
       else
       {
-         cv = KorkApi::ConsoleValue::makeString(destPtr);
+         // Not supported
+         return false;
       }
-      
-      dSprintf(destPtr, 256, "%g %g %g", pt->x, pt->y, pt->z);
-   }
-   else if ((requestedType & KorkApi::TypeDirectCopy) != 0) // i.e. same type
-   {
-      cv = vm->getTypeInZone(requestedZone, realRequestedType);
-      *((MyPoint3F*)cv.ptr()) = *pt;
    }
 
-   return cv;
+   // -> output
+
+   if (typeId == gMyPoint3FTypeID)
+   {
+      MyPoint3F* dstPtr = (MyPoint3F*)outputStorage->data.storageAddress.evaluatePtr(vm->getAllocBase());
+      if (!dstPtr)
+      {
+         return false;
+      }
+
+      *dstPtr = v;
+
+      if (outputStorage->data.storageRegister)
+         *outputStorage->data.storageRegister = outputStorage->data.storageAddress;
+
+      return true;
+   }
+   else if (typeId == KorkApi::ConsoleValue::TypeInternalString)
+   {
+      const U32 bufLen = 96;
+
+      outputStorage->FinalizeStorage(outputStorage, bufLen);
+
+      char* out = (char*)outputStorage->data.storageAddress.evaluatePtr(vm->getAllocBase());
+      if (!out) return false;
+
+      snprintf(out, bufLen, "%.9g %.9g %.9g", v.x, v.y, v.z);
+
+      if (outputStorage->data.storageRegister)
+         *outputStorage->data.storageRegister = outputStorage->data.storageAddress;
+
+      return true;
+   }
+   else
+   {
+      KorkApi::ConsoleValue vals[3];
+      vals[0] = KorkApi::ConsoleValue::makeNumber(v.x);
+      vals[1] = KorkApi::ConsoleValue::makeNumber(v.y);
+      vals[2] = KorkApi::ConsoleValue::makeNumber(v.z);
+
+      KorkApi::TypeStorageInterface castInput =
+         KorkApi::CreateRegisterStorageFromArgs(vm->mInternal, 3, vals);
+
+      return vm->castValue(typeId, &castInput, outputStorage, fieldUserPtr, flag);
+   }
 }
 
 static const char* MyPoint3F_GetTypeClassName(void*) { return "MyPoint3F"; }
@@ -155,7 +182,7 @@ struct MyBase
 static void MyBase_Create(void* classUser, Vm* vm, CreateClassReturn* outP)
 {
    MyBase* b = new MyBase();
-   b->mVMInstance = NULL;
+   b->mVMInstance = nullptr;
    outP->userPtr = b;
    outP->initialFlags |= KorkApi::ObjectFlags::ModStaticFields;
 }
@@ -166,7 +193,7 @@ static void MyBase_RemoveObject(void* user, Vm* vm, VMObject* object)
    if (b->mVMInstance)
    {
       vm->decVMRef(b->mVMInstance);
-      b->mVMInstance = NULL;
+      b->mVMInstance = nullptr;
    }
 }
 
@@ -174,7 +201,7 @@ static bool MyBase_AddObject(Vm* vm, VMObject* object, bool placeAtRoot, U32 gro
 {
    MyBase* b = (MyBase*)object->userPtr;
    
-   if (b->mVMInstance != NULL && b->mVMInstance != object)
+   if (b->mVMInstance != nullptr && b->mVMInstance != object)
    {
       vm->decVMRef(b->mVMInstance);
    }
@@ -192,7 +219,7 @@ static bool MyBase_AddObject(Vm* vm, VMObject* object, bool placeAtRoot, U32 gro
 static bool MyBase_ProcessArgs(Vm* vm, void* createdPtr, const char* name, bool isDatablock, bool internalName, int argc, const char** argv)
 {
     MyBase* b = (MyBase*)createdPtr;
-    b->mName = StringTable->insert(name);
+    b->mName = vm->internString(name);
     return true;
 }
 
@@ -229,7 +256,7 @@ static void Player_Create(void* classUser, Vm* vm, CreateClassReturn* outP)
 {
    Player* b = new Player();
    b->mPosition = {};
-   b->mVMInstance = NULL;
+   b->mVMInstance = nullptr;
    outP->userPtr = b;
    outP->initialFlags = KorkApi::ModStaticFields;
 }
@@ -238,7 +265,7 @@ static bool Player_AddObject(Vm* vm, VMObject* object, bool placeAtRoot, U32 gro
 {
    if (MyBase_AddObject(vm, object, placeAtRoot, groupAddId))
    {
-      vm->setObjectNamespace(object, vm->findNamespace(StringTable->insert("Player")));
+      vm->setObjectNamespace(object, vm->findNamespace(vm->internString("Player")));
       return true;
    }
    
@@ -285,8 +312,9 @@ int testScript(char* script, const char* filename)
       free(ptr);
    };
    cfg.logFn = MyLogger;
-   cfg.iFind = { &FindByName, &FindByPath, NULL, &FindById };
+   cfg.iFind = { &FindByName, &FindByPath, nullptr, &FindById };
    Vm* vm = createVM(&cfg);
+   gVM = vm;
    if (!vm)
    {
       return -1;
@@ -294,22 +322,24 @@ int testScript(char* script, const char* filename)
    
    TypeInfo tInfo{};
    tInfo.name = "MyPoint3F";
-   tInfo.userPtr = NULL;
-   tInfo.size = sizeof(MyPoint3F);
+   tInfo.userPtr = nullptr;
+   tInfo.fieldSize = sizeof(MyPoint3F);
+   tInfo.valueSize = sizeof(MyPoint3F);
    tInfo.iFuncs = {
-      &MyPoint3F_SetValue,
-      &MyPoint3F_CopyData,
+      &MyPoint3F_CastValue,
       &MyPoint3F_GetTypeClassName,
-      NULL
+      nullptr
    };
+   
    TypeId typeMyPoint3F = vm->registerType(tInfo);
+   gMyPoint3FTypeID = typeMyPoint3F;
    
    // 3) Register MyBase
    ClassInfo myBase{};
-   myBase.name = StringTable->insert("MyBase");
-   myBase.userPtr = NULL;
+   myBase.name = vm->internString("MyBase");
+   myBase.userPtr = nullptr;
    myBase.numFields = 0;
-   myBase.fields = NULL;
+   myBase.fields = nullptr;
    myBase.iCreate = { &MyBase_Create, &MyBase_Destroy, &MyBase_ProcessArgs, &MyBase_AddObject, &MyBase_RemoveObject, &MyBase_GetID };
    
    myBase.iCustomFields   = {};
@@ -323,13 +353,13 @@ int testScript(char* script, const char* filename)
    // 4) Register Player (derived from MyBase) with a MyPoint3F field
    static FieldInfo playerFields[1];
    playerFields[0] = {};
-   playerFields[0].pFieldname = StringTable->insert("position");
+   playerFields[0].pFieldname = vm->internString("position");
    playerFields[0].offset = Offset(mPosition, Player);
    playerFields[0].type = typeMyPoint3F;
    
    ClassInfo player{};
-   player.name        = StringTable->insert("Player");
-   player.userPtr     = NULL;
+   player.name        = vm->internString("Player");
+   player.userPtr     = nullptr;
    player.numFields   = 1;
    player.fields      = playerFields;
    player.iCreate     = { &Player_Create, &Player_Destroy, &MyBase_ProcessArgs, &Player_AddObject, &Player_RemoveObject, &MyBase_GetID };
@@ -339,16 +369,17 @@ int testScript(char* script, const char* filename)
    
    // 5) Register a basic echo in the global namespace so the script can print
    NamespaceId globalNS = vm->getGlobalNamespace(); // or obtain root namespace
-   NamespaceId playerNS = vm->findNamespace(StringTable->insert("Player"), NULL);
+   NamespaceId playerNS = vm->findNamespace(vm->internString("Player"), nullptr);
    
-   vm->addNamespaceFunction(vm->getGlobalNamespace(), StringTable->insert("echo"), cEcho, NULL, "", 1, 32);
-   vm->addNamespaceFunction(playerNS, StringTable->insert("jump"), (KorkApi::VoidFuncCallback)cPlayerJump, NULL, "()", 2, 2);
-   vm->evalCode(script, filename);
+   vm->addNamespaceFunction(vm->getGlobalNamespace(), vm->internString("echo"), cEcho, nullptr, "", 1, 32);
+   vm->addNamespaceFunction(playerNS, vm->internString("jump"), (KorkApi::VoidFuncCallback)cPlayerJump, nullptr, "()", 2, 2);
+   vm->evalCode(script, filename, "");
    
-   VMObject* found = cfg.iFind.FindObjectByNameFn(cfg.findUser, "player1", NULL);
+   VMObject* found = cfg.iFind.FindObjectByNameFn(cfg.findUser, "player1", nullptr);
    AssertFatal(found, "player1 should be registered in iFind");
    
    destroyVM(vm);
+   gVM = nullptr;
    return 0;
 }
 
@@ -365,16 +396,22 @@ int procMain(int argc, char **argv)
    {
    }
    
-   FileStream fs;
-   if (!fs.open(argv[1], FileStream::Read))
+
+   FILE* fp = fopen(argv[1], "r");
+   if (!fp)
    {
       printf("Error loading file %s\n", argv[1]);
       return 1;
    }
    
-   char* data = new char[fs.getStreamSize()+1];
-   fs.read(fs.getStreamSize(), data);
-   data[fs.getStreamSize()] = '\0';
+   fseek(fp, 0, SEEK_END);
+   size_t fend = ftell(fp);
+   fseek(fp, 0, SEEK_SET);
+   
+   char* data = new char[fend+1];
+   fread(data, 1, fend, fp);
+   data[fend] = '\0';
+   fclose(fp);
    
    int ret = testScript(data, argv[1]) ? 0 : 1;
    delete[] data;

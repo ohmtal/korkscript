@@ -21,7 +21,6 @@
 //-----------------------------------------------------------------------------
 
 #include "platform/platform.h"
-#include "platform/threads/mutex.h"
 
 //Added for the cprintf below
 #include <stdarg.h>
@@ -30,37 +29,40 @@
 S32 sgBackgroundProcessSleepTime = 200;
 S32 sgTimeManagerProcessInterval = 0;
 
+namespace Platform
+{
 
-S32 Platform::getBackgroundSleepTime()
+S32 getBackgroundSleepTime()
 {
    return sgBackgroundProcessSleepTime;
 }
 
-void Platform::cprintf( const char* str )
+void cprintf( const char* str )
 {
-    printf( "%s \n", str );
+   printf( "%s \n", str );
 }
 
-bool Platform::hasExtension(const char* pFilename, const char* pExtension)
+bool hasExtension(const char* pFilename, const char* pExtension)
 {
-    // Sanity!
-    AssertFatal( pFilename != NULL, "Filename cannot be NULL." );
-    AssertFatal( pExtension != NULL, "Extension cannot be NULL." );
-
-    // Find filename length.
-    const U32 filenameLength = dStrlen( pFilename );
-
-    // Find extension length.
-    const U32 extensionLength = dStrlen( pExtension );
-
-    // Skip if extension is longer than filename.
-    if ( extensionLength >= filenameLength )
-        return false;
-
-    // Check if extension exists.
-    return dStricmp( pFilename + filenameLength - extensionLength, pExtension ) == 0;
+   // Sanity!
+   AssertFatal( pFilename != nullptr, "Filename cannot be nullptr." );
+   AssertFatal( pExtension != nullptr, "Extension cannot be nullptr." );
+   
+   // Find filename length.
+   const U32 filenameLength = strlen( pFilename );
+   
+   // Find extension length.
+   const U32 extensionLength = strlen( pExtension );
+   
+   // Skip if extension is longer than filename.
+   if ( extensionLength >= filenameLength )
+      return false;
+   
+   // Check if extension exists.
+   return strcasecmp( pFilename + filenameLength - extensionLength, pExtension ) == 0;
 }
 
+}
 
 
 

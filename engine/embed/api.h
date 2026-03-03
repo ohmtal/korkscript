@@ -1,14 +1,20 @@
 #pragma once
+//-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
 
-#include "console/compiler.h"
-#include "console/simpleLexer.h"
+#include "platform/types.h"
+#include "embed/compilerOpcodes.h"
 #include "console/consoleValue.h"
 #include "core/bitSet.h"
 
-class TypeValidator; // TODO: change to interface
 class Namespace;
 struct EnumTable;
 class CodeBlock;
+struct ConsoleVarRef;
 
 namespace Compiler
 {
@@ -18,12 +24,16 @@ namespace Compiler
 namespace KorkApi
 {
 
+class Vm;
+class VmInternal;
+
 typedef const char * (*StringFuncCallback)(void *obj, void* userPtr, S32 argc, const char *argv[]);
 typedef S32             (*IntFuncCallback)(void *obj, void* userPtr, S32 argc, const char *argv[]);
 typedef F32           (*FloatFuncCallback)(void *obj, void* userPtr, S32 argc, const char *argv[]);
 typedef void           (*VoidFuncCallback)(void *obj, void* userPtr, S32 argc, const char *argv[]); // We have it return a value so things don't break..
 typedef bool           (*BoolFuncCallback)(void *obj, void* userPtr, S32 argc, const char *argv[]);
 typedef ConsoleValue   (*ValueFuncCallback)(void *obj, void* userPtr, S32 argc, ConsoleValue argv[]);
+typedef void           (*EnumFuncCallback)(KorkApi::Vm* vmPtr, void* userPtr, const char* name, ConsoleValue arg);
 
 template <typename C, auto ThunkFn> struct APIThunk;
 
@@ -55,35 +65,45 @@ using VMNamespace = Namespace;
 
 typedef S32 TypeId;
 
-typedef void(*SetValueFn)(void* userPtr,
-                  Vm* vm,
-                          void* dptr,
-                          S32 argc,
-                          ConsoleValue* argv,
-                          const EnumTable* tbl,
-                          BitSet32 flag,
-                          U32 typeId);
 
-// sptr -> [return]
-// destVal = srcVal
-typedef ConsoleValue(*CopyValueFn)(void* userPtr,
-                  Vm* vm,
-                         void* sptr,
-                         const EnumTable* tbl,
-                         BitSet32 flag,
-                         U32 requestedType,
-                         U32 requestedZone);
+struct BoxedTypeData
+{
+   U32 size;
+   U32 argc; // for handling tuples
+   KorkApi::ConsoleValue* storageRegister;   // Register for storage (not valid for fields)
+   KorkApi::ConsoleValue storageAddress;     // untyped real storage address (points to heap/stack storage allocated for this)
+};
+
+struct TypeStorageInterface
+{
+   // Callback to ensure underlying storage is at least newSize long
+   void (*ResizeStorage)(TypeStorageInterface* state, U32 newSize);
+   // Callback to set actual size of used storage (mainly for string stack)
+   void (*FinalizeStorage)(TypeStorageInterface* state, U32 actualSize);
+   
+   KorkApi::VmInternal* vmInternal;
+   BoxedTypeData data;
+   void* userPtr1; // user code
+   void* userPtr2; // user code
+   void* fieldObject; // related field object
+   bool isField;
+};
+
+
+typedef bool(*CastValueFnType)(void* userPtr,
+                                   Vm* vm,
+                                   TypeStorageInterface* inputStorage,
+                                   TypeStorageInterface* outputStorage,
+                                   void* fieldUserPtr,
+                                   BitSet32 flag,
+                                   U32 requestedType); // requested cast type
+
 
 struct TypeInterface
 {
-// argv[] -> dptr
-// foo = bar
-// foo = b1, b2, b3
-SetValueFn SetValue;
-
 // sptr -> [return]
 // destVal = srcVal
-CopyValueFn CopyValue;
+CastValueFnType CastValueFn;
 
 // TypeName
 const char*(*GetTypeClassNameFn)(void* userPtr);
@@ -95,6 +115,7 @@ const char*(*PrepDataFn)(void* userPtr,
                                   char* buffer,
                                   U32 bufferLen);
 
+KorkApi::ConsoleValue (*PerformOpFn)(void* userPtr, Vm* vm, U32 op, KorkApi::ConsoleValue lhs, KorkApi::ConsoleValue rhs); // result goes on STR
 };
 
 struct TypeInfo
@@ -102,7 +123,9 @@ struct TypeInfo
     StringTableEntry name;
     StringTableEntry inspectorFieldType;
     void* userPtr;
-    dsize_t size;
+    dsize_t fieldSize;
+    dsize_t valueSize;
+    bool valueIsString;
     TypeInterface iFuncs;
 };
 
@@ -110,18 +133,39 @@ struct TypeInfo
 // Class Field Info
 //
 
-typedef bool (*WriteDataNotifyFn)( void* obj, StringTableEntry pFieldName );
+struct FieldInfo;
+struct VMObject;
 
-struct FieldInfo {
-   const char* pFieldname;
-   const char* pGroupname;
-   
-   EnumTable *     table;
-   const char*     pFieldDocs;
-   TypeValidator*  validator;
-   SetValueFn        ovrSetValue;
-   CopyValueFn       ovrCopyValue;
-   WriteDataNotifyFn writeDataFn;
+typedef bool (*WriteDataNotifyFn)( void* obj, StringTableEntry pFieldName );
+typedef bool (*AllocFieldStorageFn)( KorkApi::Vm* vmPtr, void* obj, const FieldInfo* field, KorkApi::ConsoleValue arrayValue, TypeStorageInterface* outStorage, bool needWrite );
+typedef bool (*FieldKeyVisitorFn)( void* user, KorkApi::Vm* vmPtr, KorkApi::VMObject* obj, KorkApi::ConsoleValue key, KorkApi::ConsoleValue value );
+typedef bool (*EnumerateFieldKeysFn)( void* user, KorkApi::Vm* vmPtr, KorkApi::VMObject* obj, const FieldInfo* field, FieldKeyVisitorFn visit );
+
+// Field info
+// This is metadata for modifying an object field. The code assumes all fields are of a type located at an offset in the object.
+// Fields can be of 4 basic forms:
+//   - Single value (requires elementCount = 1)
+//   - Array (requires elementCount > 1)
+//   - Keyed (requires allocStorageFn & enumKeysFn)
+//   - Functional (requires ovrCastValue to be set)
+// You can also combine these basic forms so for example you can have a completely functional keyed field.
+// Note however it's not possible to have an Array which is also Keyed - this is because the field
+// only has one "array" accessor value to work with.
+// If you need both and array and a keyed field, it's best handling any extra accessors at the type level.
+struct FieldInfo
+{
+   // descriptors
+   const char* pFieldname; ///< Field name
+   const char* pGroupname; ///< Group name
+   const char* pFieldDocs; ///< Doc string
+   // user ptrs
+   void*       fieldUserPtr;    ///< intended for validator or enum table ptr
+   // func callbacks
+   CastValueFnType      ovrCastValue;   ///< Casts field value
+   WriteDataNotifyFn    writeDataFn;    ///< Checks if field can be written
+   AllocFieldStorageFn  allocStorageFn; ///< Alloc storage for value
+   EnumerateFieldKeysFn enumKeysFn;     ///< Enumerate used keys in value
+   // metadata
    S32             elementCount;
    U32             offset;
    BitSet32        flag;
@@ -154,7 +198,7 @@ struct VMObject {
    U16 flags;
    U16 refCount; // basic ref count (for interpreter loop)
 
-   VMObject() : klass(NULL), ns(NULL), userPtr(NULL), flags(0), refCount(0) {;}
+   VMObject() : klass(nullptr), ns(nullptr), userPtr(nullptr), flags(0), refCount(0) {;}
 };
 
 struct VMIterator {
@@ -172,6 +216,7 @@ typedef S32 ClassId;
 typedef void (*ConsumerCallback)(U32 level, const char *consoleLine, void* userPtr);
 typedef U32 (*AddTaggedStringCallback)(const char* vmString, void* userPtr);
 
+typedef void(*NamespaceEnumerationCallback)(void* userPtr, StringTableEntry funcName, const char* usage);
 
 struct Vm;
 
@@ -214,13 +259,15 @@ struct CustomFieldsInterface
     bool (*IterateFields)(Vm* vm, VMObject* object, VMIterator& state, StringTableEntry* name);
 	ConsoleValue (*GetFieldByIterator)(Vm* vm, VMObject* object, VMIterator& state);
 	ConsoleValue (*GetFieldByName)(Vm* vm, VMObject* object, const char* name);
-	void (*SetFieldByName)(Vm* vm, VMObject* object, const char* name, ConsoleValue value);
+	void (*SetCustomFieldByName)(Vm* vm, VMObject* object, const char* name, const char* array, U32 argc, ConsoleValue* argv);
+   bool (*SetCustomFieldType)(Vm* vm, VMObject* object, const char* name, const char* array, U32 typeId);
 };
 
 struct ClassInfo {
 	StringTableEntry name;
 	void* userPtr;
 	U32 numFields;
+   ClassId parentKlassId;
    FieldInfo* fields;
    CreateObjectInterface iCreate;
 	EnumerateObjectInterface iEnum;
@@ -237,6 +284,14 @@ struct FindObjectsInterface
 	VMObject* (*FindObjectByInternalNameFn)(void* userPtr, StringTableEntry internalName, bool recursive, VMObject* parent);
 	VMObject* (*FindObjectByIdFn)(void* userPtr, SimObjectId objectId);
    VMObject* (*FindDatablockGroup)(void* userPtr);
+};
+
+struct InternStringInterface
+{
+   StringTableEntry (*intern)(void* user, const char* str, bool caseSens);
+   StringTableEntry (*internN)(void* user, const char* str, size_t len, bool caseSens);
+   StringTableEntry (*lookup)(void* user, const char* str, bool caseSens);
+   StringTableEntry (*lookupN)(void* user, const char* str, size_t len, bool caseSens);
 };
 
 
@@ -270,6 +325,7 @@ struct TelnetInterface
     void (*GetSocketAddressFn)(void* user, U32 socket, char* buffer); // callback to get socket address; 256 byte buffer
 
     void (*QueueEvaluateFn)(void* user, const char* evaluateStr); // callback to eval command next frame
+    void (*YieldExecFn)(void* user); // callback to eval command next frame
 };
 
 struct LogConfig
@@ -293,6 +349,9 @@ struct Config {
   FindObjectsInterface iFind;
    void* findUser;
 
+   InternStringInterface iIntern;
+   void* internUser;
+
    AddTaggedStringCallback addTagFn;
    void* addTagUser;
 
@@ -302,6 +361,9 @@ struct Config {
 
    bool warnUndefinedScriptVariables;
    bool enableExceptions;
+   bool enableTuples;
+   bool enableTypes;
+   bool enableStringInterpolation;
    bool initTelnet;
    
    U16 maxFibers;
@@ -349,21 +411,39 @@ struct FiberRunResult
    State state;
    ExceptionInfo* exceptionInfo;
 
-   FiberRunResult() : value(), state(INACTIVE), exceptionInfo(NULL) {;}
+   FiberRunResult() : value(), state(INACTIVE), exceptionInfo(nullptr) {;}
    static const char* stateAsString(State inState);
    static const char* getExceptionLineIp();
 };
 
-enum Constants 
+struct FiberFrameInfo
 {
-  DSOVersion = 77,
-  MaxLineLength = 512,
-  MaxDataTypes = 256
+   StringTableEntry fullPath;
+   StringTableEntry scopeName;
+   StringTableEntry scopeNamespace;
 };
 
-enum
+enum Constants
 {
-StringTagPrefixByte = 0x01
+  DSOVersion = 78,
+  MinDSOVersion = 77,
+  MaxDSOVersion = 78,
+  MaxLineLength = 512,
+  MaxDataTypes = 256,
+  MaxArgs = 20 // Should match StringStack
+};
+
+enum ACRFieldTypes : U16
+{
+   StartGroupFieldType = 0xFFFD,  // 65533
+   EndGroupFieldType   = 0xFFFE,  // 65534
+   DepricatedFieldType = 0xFFFF   // 65535
+};
+
+struct CompiledBlock
+{
+    U32 size;
+    U8* data;
 };
 
 class Vm
@@ -373,15 +453,19 @@ public:
    
 public:
    
-	NamespaceId findNamespace(StringTableEntry name, StringTableEntry package = NULL);
+	NamespaceId findNamespace(StringTableEntry name, StringTableEntry package = nullptr);
+   NamespaceId lookupNamespace(StringTableEntry name, StringTableEntry package = nullptr);
    NamespaceId getGlobalNamespace();
    void setNamespaceUsage(NamespaceId ns, const char* usage);
+   void setNamespaceUserPtr(NamespaceId ns, void* userPtr);
 	void activatePackage(StringTableEntry pkgName);
 	void deactivatePackage(StringTableEntry pkgName);
+    bool isPackage(StringTableEntry pkgName);
    bool linkNamespace(StringTableEntry parent, StringTableEntry child);
    bool unlinkNamespace(StringTableEntry parent, StringTableEntry child);
    bool linkNamespaceById(NamespaceId parent, NamespaceId child);
    bool unlinkNamespaceById(NamespaceId parent, NamespaceId child);
+   void enumerateNamespace(NamespaceId nsId, void* userPtr, NamespaceEnumerationCallback funcPtr);
    
 
     const char* tabCompleteNamespace(NamespaceId nsId, const char *prevText, S32 baseLen, bool fForward);
@@ -392,6 +476,10 @@ public:
     ClassId getClassId(const char* name);
     TypeInfo* getTypeInfo(TypeId ident);
 
+    bool castValue(TypeId inputType, TypeStorageInterface* inputStorage, TypeStorageInterface* outputStorage, void* fieldUserPtr, BitSet32 flags);
+   
+   ConsoleValue castToReturn(U32 argc, KorkApi::ConsoleValue* argv, U32 inputTypeId, U32 outputTypeId);
+
 	// Hard refs to console values
 	ConsoleHeapAllocRef createHeapRef(U32 size);
 	void releaseHeapRef(ConsoleHeapAllocRef value);
@@ -399,13 +487,13 @@ public:
    // Heap values (like strings)
    ConsoleValue getStringFuncBuffer(U32 size);
    ConsoleValue getStringReturnBuffer(U32 size);
-   ConsoleValue getTypeFunc(TypeId typeId);
-   ConsoleValue getTypeReturn(TypeId typeId);
+   ConsoleValue getTypeFunc(TypeId typeId, U32 heapSize=0);
+   ConsoleValue getTypeReturn(TypeId typeId, U32 heapSize=0);
    
    
    // Gets a string in a specific zone
    ConsoleValue getStringInZone(U16 zone, U32 size);
-   ConsoleValue getTypeInZone(U16 zone, TypeId typeId);
+   ConsoleValue getTypeInZone(U16 zone, TypeId typeId, U32 heapSize=0);
 
    void pushValueFrame();
    void popValueFrame();
@@ -427,11 +515,15 @@ public:
    void addNamespaceFunction(NamespaceId nsId, StringTableEntry name,  BoolFuncCallback, void* userPtr, const char *usage, S32 minArgs, S32 maxArgs);
    void addNamespaceFunction(NamespaceId nsId, StringTableEntry name,  ValueFuncCallback, void* userPtr, const char *usage, S32 minArgs, S32 maxArgs);
    bool isNamespaceFunction(NamespaceId nsId, StringTableEntry name);
-   
-   bool compileCodeBlock(const char* code, const char* filename, U32* outCodeSize, U8** outCode);
-   ConsoleValue execCodeBlock(U32 codeSize, U8* code, const char* filename, bool noCalls, int setFrame);
+   StringTableEntry getMethodNamespaceName(NamespaceId nsId, StringTableEntry name);
+   void markNamespaceGroup(NamespaceId nsId, StringTableEntry groupName, StringTableEntry usage);
 
-   ConsoleValue evalCode(const char* code, const char* filename, S32 setFrame=-1);
+
+   bool compileCodeBlock(const char* code, const char* filename, CompiledBlock* outBlock);
+   ConsoleValue execCodeBlock(U32 codeSize, U8* code, const char* filename, const char* modPath, bool noCalls, int setFrame);
+   void freeCompiledBlock(CompiledBlock block);
+
+   ConsoleValue evalCode(const char* code, const char* filename, const char* modPath, S32 setFrame=-1);
    ConsoleValue call(int argc, ConsoleValue* argv, bool startSuspended=false);
    ConsoleValue callObject(VMObject* h, int argc, ConsoleValue* argv, bool startSuspended=false);
 
@@ -443,10 +535,12 @@ public:
    VMObject* findObjectByPath(const char* path);
    VMObject* findObjectById(SimObjectId ident);
 
-   bool setObjectField(VMObject* object, StringTableEntry fieldName, ConsoleValue nativeValue, const char* arrayIndex);
-   bool setObjectFieldString(VMObject* object, StringTableEntry fieldName, const char* stringValue, const char* arrayIndex);
-   ConsoleValue getObjectField(VMObject* object, StringTableEntry fieldName, ConsoleValue nativeValue, const char* arrayIndex);
-   const char* getObjectFieldString(VMObject* object, StringTableEntry fieldName, const char** stringValue, const char* arrayIndex);
+   bool setObjectField(VMObject* object, StringTableEntry fieldName, ConsoleValue nativeValue, ConsoleValue arrayIndex);
+   bool setObjectFieldTuple(VMObject* object, StringTableEntry fieldName, U32 argc, ConsoleValue* argv, ConsoleValue arrayIndex);
+   bool setObjectFieldString(VMObject* object, StringTableEntry fieldName, const char* stringValue, ConsoleValue arrayIndex);
+   ConsoleValue getObjectField(VMObject* object, StringTableEntry fieldName, ConsoleValue arrayIndex);
+   const char* getObjectFieldString(VMObject* object, StringTableEntry fieldName, ConsoleValue arrayIndex);
+   void assignFieldsFromTo(VMObject* from, VMObject* to);
 
    void setGlobalVariable(StringTableEntry name, ConsoleValue value);
    void setLocalVariable(StringTableEntry name, ConsoleValue value);
@@ -485,8 +579,10 @@ public:
    // Fiber API
    void setCurrentFiberMain();
    void setCurrentFiber(FiberId fiber);
-   FiberId createFiber(void* userPtr = NULL); // needs exec too
+   FiberId createFiber(void* userPtr = nullptr); // needs exec too
    FiberId getCurrentFiber();
+   bool isFiberMain();
+   FiberRunResult::State getFiberState(KorkApi::FiberId fid);
    FiberRunResult::State getCurrentFiberState();
    void clearCurrentFiberError();
    void* getCurrentFiberUserPtr();
@@ -495,11 +591,30 @@ public:
    void throwFiber(U32 mask);
    bool getCurrentFiberFileLine(StringTableEntry* outFile, U32* outLine);
    FiberRunResult resumeCurrentFiber(ConsoleValue value);
+   S32 getCurrentFiberFrameDepth();
+   FiberFrameInfo getCurrentFiberFrameInfo(S32 frame=-1);
 
    const char* getExceptionFileLine(ExceptionInfo* info);
    
    bool dumpFiberStateToBlob(U32 numFibers, FiberId* fibers, U32* outBlobSize, U8** outBlob);
    bool restoreFiberStateFromBlob(U32* outNumFibers, FiberId** outFibers, U32 blobSize, U8* blob);
+
+   // String intern functions
+   // These just redirect to iIntern interface; they are provided here for ease of use.
+
+  StringTableEntry internString(const char* str, bool caseSens=false);
+  StringTableEntry internStringN(const char* str, U32 len, bool caseSens=false);
+  StringTableEntry lookupString(const char* str, bool caseSens=false);
+  StringTableEntry lookupStringN(const char* str, U32 len, bool caseSens=false);
+
+  // Enum dict API
+  void enumGlobals(const char* expr, void* userPtr, EnumFuncCallback callback);
+  bool enumLocals(void* userPtr, EnumFuncCallback callback, S32 frame=-1);
+   
+   // Storage helpers
+   bool initFixedTypeStorage(void* ptr, U16 typeId, bool isField, TypeStorageInterface* outInterface);
+   bool initReturnTypeStorage(U32 minSize, U16 typeId, TypeStorageInterface* outInterface);
+   bool initRegisterTypeStorage(U32 argc, KorkApi::ConsoleValue* argv, TypeStorageInterface* outInterface);
 };
 
 Vm* createVM(Config* cfg);

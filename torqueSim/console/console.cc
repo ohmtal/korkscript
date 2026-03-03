@@ -21,6 +21,8 @@
 //-----------------------------------------------------------------------------
 
 #include "platform/platform.h"
+#include "platform/platformProcess.h"
+#include "platform/platformString.h"
 #include "platform/threads/thread.h"
 
 #include "embed/api.h"
@@ -29,7 +31,6 @@
 #include "console/console.h"
 #include "console/consoleObject.h"
 #include "console/consoleTypes.h"
-#include "console/stringStack.h"
 
 #include "sim/simBase.h"
 
@@ -40,10 +41,11 @@
 #include "core/escape.h"
 
 static Mutex* sLogMutex;
+extern char scriptFilenameBuffer[1024];
 
 KorkApi::Vm* sVM;
 
-ConsoleConstructor *ConsoleConstructor::first = NULL;
+ConsoleConstructor *ConsoleConstructor::first = nullptr;
 
 static char scratchBuffer[4096];
 
@@ -60,7 +62,7 @@ static const char * prependDollar ( const char * name )
       S32   len = dStrlen(name);
       AssertFatal(len < sizeof(scratchBuffer)-2, "CONSOLE: name too long");
       scratchBuffer[0] = '$';
-      dMemcpy(scratchBuffer + 1, name, len + 1);
+      memcpy(scratchBuffer + 1, name, len + 1);
       name = scratchBuffer;
    }
    return name;
@@ -73,7 +75,7 @@ static const char * prependPercent ( const char * name )
       S32   len = dStrlen(name);
       AssertFatal(len < sizeof(scratchBuffer)-2, "CONSOLE: name too long");
       scratchBuffer[0] = '%';
-      dMemcpy(scratchBuffer + 1, name, len + 1);
+      memcpy(scratchBuffer + 1, name, len + 1);
       name = scratchBuffer;
    }
    return name;
@@ -107,10 +109,14 @@ void ConsoleConstructor::setup()
          Con::addCommand(walk->className, walk->funcName, walk->vc, walk->usage, walk->mina, walk->maxa);
       else if(walk->bc)
          Con::addCommand(walk->className, walk->funcName, walk->bc, walk->usage, walk->mina, walk->maxa);
+      else if(walk->cvc)
+         Con::addCommand(walk->className, walk->funcName, walk->cvc, walk->usage, walk->mina, walk->maxa);
       else if(walk->group)
          Con::markCommandGroup(walk->className, walk->funcName, walk->usage);
       else if(walk->overload)
-         Con::addOverload(walk->className, walk->funcName, walk->usage);
+      {
+         // ignore; legacy
+      }
       else if(walk->ns)
       {
          sVM->setNamespaceUsage(sVM->findNamespace(walk->className), walk->usage);
@@ -150,6 +156,12 @@ ConsoleConstructor::ConsoleConstructor(const char *className, const char *funcNa
    bc = bfunc;
 }
 
+ConsoleConstructor::ConsoleConstructor(const char *className, const char *funcName, ValueCallback cvcfunc, const char *usage, S32 minArgs, S32 maxArgs)
+{
+   init(className, funcName, usage, minArgs, maxArgs);
+   cvc = cvcfunc;
+}
+
 ConsoleConstructor::ConsoleConstructor(const char* className, const char* groupName, const char* aUsage)
 {
    init(className, groupName, usage, -1, -2);
@@ -161,7 +173,7 @@ ConsoleConstructor::ConsoleConstructor(const char* className, const char* groupN
    // is properly populated.
 
    // This is probably redundant.
-   static char * lastUsage = NULL;
+   static char * lastUsage = nullptr;
    if(aUsage)
       lastUsage = (char *)aUsage;
 
@@ -170,7 +182,7 @@ ConsoleConstructor::ConsoleConstructor(const char* className, const char* groupN
 
 ConsoleConstructor::ConsoleConstructor(const char* className, const char* usage)
 {
-   init(className, NULL, usage, -1, -2);
+   init(className, nullptr, usage, -1, -2);
    ns = true;
 }
 
@@ -183,9 +195,9 @@ struct CallbackInfo
    void* userPtr;
 };
 
-static Vector<CallbackInfo> gConsumers(__FILE__, __LINE__);
+static std::vector<CallbackInfo> gConsumers;
 static DataChunker consoleLogChunker;
-static Vector<ConsoleLogEntry> consoleLog(__FILE__, __LINE__);
+static std::vector<ConsoleLogEntry> consoleLog;
 static bool consoleLogLocked;
 static bool logBufferEnabled=true;
 static S32 printLevel = 10;
@@ -227,13 +239,16 @@ void init()
 
    // Extra stuff
    config.enableExceptions = true;
+   config.enableTuples = true;
+   config.enableTypes = true;
+   config.enableStringInterpolation = true;
 
 
    config.mallocFn = [](size_t size, void*){
-      return dMalloc(size);
+      return malloc(size);
    };
    config.freeFn = [](void* addr, void*){
-      dFree(addr);
+      free(addr);
    };
    config.logFn = [](U32 level, const char *consoleLine, void* userPtr){
       Con::printf("%s", consoleLine);
@@ -241,20 +256,20 @@ void init()
    
    config.iFind.FindObjectByIdFn = [](void* userPtr, SimObjectId ident){
       SimObject* obj = Sim::findObject(ident);
-      return obj ? obj->getVMObject() : (KorkApi::VMObject*)NULL;
+      return obj ? obj->getVMObject() : (KorkApi::VMObject*)nullptr;
    };
    config.iFind.FindDatablockGroup = [](void* userPtr){
       SimObject* obj = Sim::getDataBlockGroup();
-      return obj ? obj->getVMObject() : (KorkApi::VMObject*)NULL;
+      return obj ? obj->getVMObject() : (KorkApi::VMObject*)nullptr;
    };
    config.iFind.FindObjectByInternalNameFn = [](void* userPtr, StringTableEntry name, bool recursive, KorkApi::VMObject* parent){
       SimObject* obj = static_cast<SimObject*>(parent->userPtr);
       SimSet* set = dynamic_cast<SimSet*>(obj);
       obj = set->findObjectByInternalName(name, recursive);
-      return obj ? obj->getVMObject() : (KorkApi::VMObject*)NULL;
+      return obj ? obj->getVMObject() : (KorkApi::VMObject*)nullptr;
    };
    config.iFind.FindObjectByNameFn = [](void* userPtr, StringTableEntry name, KorkApi::VMObject* parent){
-      SimObject* obj = NULL;
+      SimObject* obj = nullptr;
       if (parent)
       {
          obj = static_cast<SimObject*>(parent->userPtr);
@@ -264,20 +279,54 @@ void init()
       {
          obj = Sim::findObject(name);
       }
-      return obj ? obj->getVMObject() : (KorkApi::VMObject*)NULL;
+      return obj ? obj->getVMObject() : (KorkApi::VMObject*)nullptr;
    };
    config.iFind.FindObjectByPathFn = [](void* userPtr, StringTableEntry name){
       SimObject* obj = Sim::findObject(name);
-      return obj ? obj->getVMObject() : (KorkApi::VMObject*)NULL;
+      return obj ? obj->getVMObject() : (KorkApi::VMObject*)nullptr;
    };
    
+   config.iIntern.intern = [](void* user, const char* value, bool caseSens){
+      _StringTable* localIntern = (_StringTable*)user;
+      if (value == nullptr)
+      {
+         return localIntern->EmptyString;
+      }
+      return (StringTableEntry)localIntern->insert(value, caseSens);
+   };
+   config.iIntern.internN = [](void* user, const char* value, size_t len, bool caseSens){
+      _StringTable* localIntern = (_StringTable*)user;
+      if (value == nullptr)
+      {
+         return localIntern->EmptyString;
+      }
+      return (StringTableEntry)localIntern->insertn(value, len, caseSens);
+   };
+   config.iIntern.lookup = [](void* user, const char* value, bool caseSens){
+      _StringTable* localIntern = (_StringTable*)user;
+      if (value == nullptr)
+      {
+         return localIntern->EmptyString;
+      }
+      return (StringTableEntry)localIntern->lookup(value, caseSens);
+   };
+   config.iIntern.lookupN = [](void* user, const char* value, size_t len, bool caseSens){
+      _StringTable* localIntern = (_StringTable*)user;
+      if (value == nullptr)
+      {
+         return localIntern->EmptyString;
+      }
+      return (StringTableEntry)localIntern->lookupn(value, len, caseSens);
+   };
+   config.internUser = StringTable;
+
    sVM = KorkApi::createVM(&config);
 
    AssertFatal(active == false, "Con::init should only be called once.");
 
    // Set up general init values.
    active                        = true;
-   logFileName                   = NULL;
+   logFileName                   = nullptr;
    newLogFile                    = true;
    sLogMutex                     = new Mutex;
 
@@ -291,27 +340,26 @@ void init()
 
    // Setup the console types.  (tgemit - needs to be here)
    ConsoleBaseType::initialize();
+   ConsoleBaseType::registerWithVM(sVM);
 
    // Variables
    setVariable("Con::prompt", "% ");
    addVariable("Con::logBufferEnabled", TypeBool, &logBufferEnabled);
    addVariable("Con::printLevel", TypeS32, &printLevel);
-   // TOFIX addVariable("Con::warnUndefinedVariables", TypeBool, &config.gWarnUndefinedScriptVariables);
+   
+   /* 
+   NOTE: not currently exposed since these are internal state values.
+   addVariable("Con::warnUndefinedVariables", TypeBool, &config.gWarnUndefinedScriptVariables);
 
    // Current script file name and root
-#if TOFIX
    Con::addVariable( "Con::File", TypeString, &gCurrentFile );
    Con::addVariable( "Con::Root", TypeString, &gCurrentRoot );
-#endif
-
-   // Setup the console types.
-   ConsoleBaseType::initialize();
+   */
 
    // And finally, the ACR...
    AbstractClassRep::initialize();
 
    // Register types with
-   ConsoleBaseType::registerWithVM(sVM);
    AbstractClassRep::registerWithVM(sVM);
 }
 
@@ -325,7 +373,7 @@ void shutdown()
    consoleLogFile.close();
 
    KorkApi::destroyVM(sVM);
-   sVM = NULL;
+   sVM = nullptr;
 
    SAFE_DELETE( sLogMutex );
 }
@@ -350,8 +398,8 @@ bool isMainThread()
 void getLockLog(ConsoleLogEntry *&log, U32 &size)  
 {  
    consoleLogLocked = true;
-   log = consoleLog.address();
-   size = consoleLog.size();  
+   log = &consoleLog[0];
+   size = consoleLog.size();
 }
 
 void unlockLog()
@@ -544,7 +592,7 @@ void cls( void )
    if(consoleLogLocked)
       return;
    consoleLogChunker.freeBlocks();
-   consoleLog.setSize(0);
+   consoleLog.resize(0);
 };
 
 //------------------------------------------------------------------------------
@@ -566,7 +614,7 @@ static void _outputDebugString(char* pString)
     dMemset( wstr, 0, stringLength );
 
     // Convert to wide string.
-    Con::MultiByteToWideChar( CP_ACP, NULL, pString, -1, wstr, stringLength );  
+    Con::MultiByteToWideChar( CP_ACP, nullptr, pString, -1, wstr, stringLength );  
 
     // Output string.
     Con::OutputDebugStringW( wstr );
@@ -643,18 +691,18 @@ class ConPrinfThreadedEvent : public SimEvent
    ConsoleLogEntry::Type mType;
    char *mBuf;
 public:
-   ConPrinfThreadedEvent(ConsoleLogEntry::Level level = ConsoleLogEntry::Normal, ConsoleLogEntry::Type type = ConsoleLogEntry::General, const char *buf = NULL)
+   ConPrinfThreadedEvent(ConsoleLogEntry::Level level = ConsoleLogEntry::Normal, ConsoleLogEntry::Type type = ConsoleLogEntry::General, const char *buf = nullptr)
    {
       mLevel = level;
       mType = type;
       if(buf)
       {
-         mBuf = (char*)dMalloc(dStrlen(buf)+1);
-         dMemcpy((void*)mBuf, (void*)buf, dStrlen(buf));
+         mBuf = (char*)malloc(dStrlen(buf)+1);
+         memcpy((void*)mBuf, (void*)buf, dStrlen(buf));
          mBuf[dStrlen(buf)] = 0;
       }
       else
-         mBuf = NULL;
+         mBuf = nullptr;
    }
    ~ConPrinfThreadedEvent()
    {
@@ -755,13 +803,13 @@ void errorf(const char* fmt,...)
 void setVariable(const char *name, const char *value)
 {
    name = prependDollar(name);
-   sVM->setGlobalVariable(StringTable->insert(name), KorkApi::ConsoleValue::makeString(value));
+   sVM->setGlobalVariable(sVM->internString(name), KorkApi::ConsoleValue::makeString(value));
 }
 
 void setLocalVariable(const char *name, const char *value)
 {
    name = prependPercent(name);
-   sVM->setLocalVariable(StringTable->insert(name), KorkApi::ConsoleValue::makeString(value));
+   sVM->setLocalVariable(sVM->internString(name), KorkApi::ConsoleValue::makeString(value));
 }
 
 void setBoolVariable(const char *varName, bool value)
@@ -792,15 +840,16 @@ void addConsumer(ConsumerCallback consumer, void* userPtr)
    gConsumers.push_back(info);
 }
 
-// dhc - found this empty -- trying what I think is a reasonable impl.
 void removeConsumer(ConsumerCallback consumer, void* userPtr)
 {
-   for(U32 i = 0; i < (U32)gConsumers.size(); i++)
+   for(S32 i = gConsumers.size()-1; i >= 0; i--)
+   {
       if (gConsumers[i].callback == consumer && gConsumers[i].userPtr == userPtr)
       { // remove it from the list.
-         gConsumers.erase(i);
+         gConsumers.erase(gConsumers.begin() + i);
          break;
       }
+   }
 }
 
 void stripColorChars(char* line)
@@ -838,7 +887,7 @@ const char *getVariable(const char *name)
    {
       S32 len = dStrlen(name);
       AssertFatal(len < sizeof(scratchBuffer)-1, "Sim::getVariable - name too long");
-      dMemcpy(scratchBuffer, name, len+1);
+      memcpy(scratchBuffer, name, len+1);
 
       char * token = dStrtok(scratchBuffer, ".");
       SimObject * obj = Sim::findObject(token);
@@ -849,9 +898,9 @@ const char *getVariable(const char *name)
       if(!token)
          return("");
 
-      while(token != NULL)
+      while(token != nullptr)
       {
-         const char * val = obj->getDataField(StringTable->insert(token), 0);
+         const char * val = obj->getDataField(sVM->internString(token), 0);
          if(!val)
             return("");
 
@@ -868,32 +917,37 @@ const char *getVariable(const char *name)
    }
 
    name = prependDollar(name);
-   return (const char*)sVM->getGlobalVariable(StringTable->insert(name)).evaluatePtr(sVM->getAllocBase());
+   return (const char*)sVM->getGlobalVariable(sVM->internString(name)).evaluatePtr(sVM->getAllocBase());
 }
 
 const char *getLocalVariable(const char *name)
 {
    name = prependPercent(name);
 
-   return (const char*)sVM->getLocalVariable(StringTable->insert(name)).evaluatePtr(sVM->getAllocBase());
+   return (const char*)sVM->getLocalVariable(sVM->internString(name)).evaluatePtr(sVM->getAllocBase());
 }
 
 bool getBoolVariable(const char *varName, bool def)
 {
    const char *value = getVariable(varName);
-   return *value ? dAtob(value) : def;
+   return (value && *value) ? dAtob(value) : def;
 }
 
 S32 getIntVariable(const char *varName, S32 def)
 {
    const char *value = getVariable(varName);
-   return *value ? dAtoi(value) : def;
+   return (value && *value) ? dAtoi(value) : def;
 }
 
 F32 getFloatVariable(const char *varName, F32 def)
 {
    const char *value = getVariable(varName);
-   return *value ? dAtof(value) : def;
+   return (value && *value) ? dAtof(value) : def;
+}
+
+StringTableEntry getCurrentCodeBlockFullPath()
+{
+   return sVM->getCurrentFiberFrameInfo().fullPath;
 }
 
 //---------------------------------------------------------------------------
@@ -908,7 +962,7 @@ bool addVariable(const char *name,
 
 bool removeVariable(const char *name)
 {
-   name = StringTable->lookup(prependDollar(name));
+   name = sVM->lookupString(prependDollar(name));
    return name!=0 && sVM->removeGlobalVariable(name);
 }
 
@@ -953,7 +1007,7 @@ KorkApi::ConsoleValue getStringArg( const char *arg )
    U32 len = dStrlen( arg ) + 1;
    KorkApi::ConsoleValue retV = sVM->getStringFuncBuffer( len );
    char *ret = (char*)retV.evaluatePtr(sVM->getAllocBase());
-   dMemcpy( ret, arg, len );
+   memcpy( ret, arg, len );
    return retV;
 }
 
@@ -961,35 +1015,40 @@ KorkApi::ConsoleValue getStringArg( const char *arg )
 
 void addCommand(const char *nsName, const char *name,StringCallback cb, const char *usage, S32 minArgs, S32 maxArgs)
 {
-   sVM->addNamespaceFunction(lookupNamespace(StringTable->insert(nsName)), StringTable->insert(name), (KorkApi::StringFuncCallback)cb, sVM, usage, minArgs, maxArgs);
+   sVM->addNamespaceFunction(lookupNamespace(sVM->internString(nsName)), sVM->internString(name), (KorkApi::StringFuncCallback)cb, sVM, usage, minArgs, maxArgs);
 }
 
 void addCommand(const char *nsName, const char *name,VoidCallback cb, const char *usage, S32 minArgs, S32 maxArgs)
 {
-   sVM->addNamespaceFunction(lookupNamespace(StringTable->insert(nsName)), StringTable->insert(name), (KorkApi::VoidFuncCallback)cb, sVM, usage, minArgs, maxArgs);
+   sVM->addNamespaceFunction(lookupNamespace(sVM->internString(nsName)), sVM->internString(name), (KorkApi::VoidFuncCallback)cb, sVM, usage, minArgs, maxArgs);
 }
 
 void addCommand(const char *nsName, const char *name,IntCallback cb, const char *usage, S32 minArgs, S32 maxArgs)
 {
-   sVM->addNamespaceFunction(lookupNamespace(StringTable->insert(nsName)), StringTable->insert(name), (KorkApi::IntFuncCallback)cb, sVM, usage, minArgs, maxArgs);
+   sVM->addNamespaceFunction(lookupNamespace(sVM->internString(nsName)), sVM->internString(name), (KorkApi::IntFuncCallback)cb, sVM, usage, minArgs, maxArgs);
 }
 
 void addCommand(const char *nsName, const char *name,FloatCallback cb, const char *usage, S32 minArgs, S32 maxArgs)
 {
-   sVM->addNamespaceFunction(lookupNamespace(StringTable->insert(nsName)), StringTable->insert(name), (KorkApi::FloatFuncCallback)cb, sVM, usage, minArgs, maxArgs);
+   sVM->addNamespaceFunction(lookupNamespace(sVM->internString(nsName)), sVM->internString(name), (KorkApi::FloatFuncCallback)cb, sVM, usage, minArgs, maxArgs);
 }
 
 void addCommand(const char *nsName, const char *name,BoolCallback cb, const char *usage, S32 minArgs, S32 maxArgs)
 {
-   sVM->addNamespaceFunction(lookupNamespace(StringTable->insert(nsName)), StringTable->insert(name), (KorkApi::BoolFuncCallback)cb, sVM, usage, minArgs, maxArgs);
+   sVM->addNamespaceFunction(lookupNamespace(sVM->internString(nsName)), sVM->internString(name), (KorkApi::BoolFuncCallback)cb, sVM, usage, minArgs, maxArgs);
 }
+
+void addCommand(const char *nsName, const char *name,ValueCallback cvc, const char *usage, S32 minArgs, S32 maxArgs)
+{
+   sVM->addNamespaceFunction(lookupNamespace(sVM->internString(nsName)), sVM->internString(name), (KorkApi::ValueFuncCallback)cvc, sVM, usage, minArgs, maxArgs);
+}
+
 
 void markCommandGroup(const char * nsName, const char *name, const char* usage)
 {
-   #if TOFIX
-   Namespace *ns = lookupNamespace(nsName);
-   ns->markGroup(name,usage);
-   #endif
+   sVM->markNamespaceGroup(nsName ? sVM->findNamespace(sVM->internString(nsName)) : sVM->getGlobalNamespace(), 
+                           sVM->internString(name),
+                           usage ? sVM->internString(usage, true) : nullptr);
 }
 
 void beginCommandGroup(const char * nsName, const char *name, const char* usage)
@@ -999,44 +1058,37 @@ void beginCommandGroup(const char * nsName, const char *name, const char* usage)
 
 void endCommandGroup(const char * nsName, const char *name)
 {
-   markCommandGroup(nsName, name, NULL);
-}
-
-void addOverload(const char * nsName, const char * name, const char * altUsage)
-{
-   Namespace *ns = lookupNamespace(nsName);
-   // TOFIX ns->addOverload(name,altUsage);
+   markCommandGroup(nsName, name, nullptr);
 }
 
 void addCommand(const char *name,StringCallback cb,const char *usage, S32 minArgs, S32 maxArgs)
 {
-   sVM->addNamespaceFunction(sVM->getGlobalNamespace(), StringTable->insert(name), (KorkApi::StringFuncCallback)cb, sVM, usage, minArgs, maxArgs);
+   sVM->addNamespaceFunction(sVM->getGlobalNamespace(), sVM->internString(name), (KorkApi::StringFuncCallback)cb, sVM, usage, minArgs, maxArgs);
 }
 
 void addCommand(const char *name,VoidCallback cb,const char *usage, S32 minArgs, S32 maxArgs)
 {
-   sVM->addNamespaceFunction(sVM->getGlobalNamespace(), StringTable->insert(name), (KorkApi::VoidFuncCallback)cb, sVM, usage, minArgs, maxArgs);
+   sVM->addNamespaceFunction(sVM->getGlobalNamespace(), sVM->internString(name), (KorkApi::VoidFuncCallback)cb, sVM, usage, minArgs, maxArgs);
 }
 
 void addCommand(const char *name,IntCallback cb,const char *usage, S32 minArgs, S32 maxArgs)
 {
-   sVM->addNamespaceFunction(sVM->getGlobalNamespace(), StringTable->insert(name), (KorkApi::IntFuncCallback)cb, sVM, usage, minArgs, maxArgs);
+   sVM->addNamespaceFunction(sVM->getGlobalNamespace(), sVM->internString(name), (KorkApi::IntFuncCallback)cb, sVM, usage, minArgs, maxArgs);
 }
 
 void addCommand(const char *name,FloatCallback cb,const char *usage, S32 minArgs, S32 maxArgs)
 {
-   sVM->addNamespaceFunction(sVM->getGlobalNamespace(), StringTable->insert(name), (KorkApi::FloatFuncCallback)cb, sVM, usage, minArgs, maxArgs);
+   sVM->addNamespaceFunction(sVM->getGlobalNamespace(), sVM->internString(name), (KorkApi::FloatFuncCallback)cb, sVM, usage, minArgs, maxArgs);
 }
 
 void addCommand(const char *name,BoolCallback cb,const char *usage, S32 minArgs, S32 maxArgs)
 {
-   sVM->addNamespaceFunction(sVM->getGlobalNamespace(), StringTable->insert(name), (KorkApi::BoolFuncCallback)cb, sVM, usage, minArgs, maxArgs);
+   sVM->addNamespaceFunction(sVM->getGlobalNamespace(), sVM->internString(name), (KorkApi::BoolFuncCallback)cb, sVM, usage, minArgs, maxArgs);
 }
 
 // Known as expandOldScriptFilename in T3D
-bool expandScriptFilename(char *filename, U32 size, const char *src)
+bool expandScriptFilename(char *filename, U32 size, const char *src, const char* cbName)
 {
-   const StringTableEntry cbName = NULL; // TOFIX CodeBlock::getCurrentCodeBlockName();
    if (!cbName)
    {
       dStrcpy(filename, src);
@@ -1063,7 +1115,7 @@ bool expandScriptFilename(char *filename, U32 size, const char *src)
       return true;
    }
    
-   if (slash == NULL)
+   if (slash == nullptr)
    {
       Con::errorf("Illegal CodeBlock path detected (no mod directory): %s", cbName);
       *filename = 0;
@@ -1090,120 +1142,74 @@ const char *evaluate(const char* string, bool echo, const char *fileName)
       Con::printf("%s%s", getVariable( "$Con::Prompt" ), string);
 
    if(fileName)
-      fileName = StringTable->insert(fileName);
+      fileName = sVM->internString(fileName);
 
-   KorkApi::ConsoleValue retValue = sVM->evalCode(string, fileName);
+   KorkApi::ConsoleValue retValue = sVM->evalCode(string, fileName, "");
    return sVM->valueAsString(retValue);
 }
 //------------------------------------------------------------------------------
 const char *evaluatef(const char* string, ...)
 {
-   const char * result = NULL;
+   const char * result = nullptr;
    char * buffer = new char[4096];
-   if (buffer != NULL)
+   if (buffer != nullptr)
    {
       va_list args;
       va_start(args, string);
       dVsprintf(buffer, 4096, string, args);
       va_end (args);
 
-      KorkApi::ConsoleValue retValue = sVM->evalCode(buffer, NULL);
+      KorkApi::ConsoleValue retValue = sVM->evalCode(buffer, nullptr, nullptr);
       result = sVM->valueAsString(retValue);
 
       delete [] buffer;
-      buffer = NULL;
+      buffer = nullptr;
    }
 
    return result;
 }
 
-const char *execute(S32 argc, const char *argv[])
+KorkApi::ConsoleValue execute(S32 argc, KorkApi::ConsoleValue argv[])
 {
-#ifdef TORQUE_MULTITHREAD
-   if(isMainThread())
-   {
-#endif
-      StringTableEntry funcName = StringTable->insert(argv[0]);
-      
-      KorkApi::ConsoleValue retValue = KorkApi::ConsoleValue();
+   AssertFatal(isMainThread(), "Please use WaitableLambdaSimEvent instead");
+   
+   StringTableEntry funcName = sVM->internString((const char*)argv[0].evaluatePtr(sVM->getAllocBase()));
+   
+   KorkApi::ConsoleValue retValue = KorkApi::ConsoleValue();
 
-      KorkApi::ConsoleValue localArgv[StringStack::MaxArgs];
-      StringStack::convertArgsReverse(sVM->mInternal, argc, argv, localArgv);
-      sVM->callNamespaceFunction(sVM->getGlobalNamespace(), funcName, argc, localArgv, retValue);
-      sVM->clearCurrentFiberError();
+   sVM->callNamespaceFunction(sVM->getGlobalNamespace(), funcName, argc, argv, retValue);
+   sVM->clearCurrentFiberError();
 
-      return sVM->valueAsString(retValue);
-
-#ifdef TORQUE_MULTITHREAD
-   }
-   else
-   {
-      SimConsoleThreadExecCallback cb;
-      SimConsoleThreadExecEvent *evt = new SimConsoleThreadExecEvent(argc, argv, false, &cb);
-      Sim::postEvent(Sim::getRootGroup(), evt, Sim::getCurrentTime());
-      
-      return cb.waitForResult();
-   }
-#endif
+   return retValue;
 }
 
 //------------------------------------------------------------------------------
-const char *execute(SimObject *object, S32 argc, const char *argv[],bool thisCallOnly)
+KorkApi::ConsoleValue execute(SimObject *object, S32 argc, KorkApi::ConsoleValue argv[],bool thisCallOnly)
 {
-   static char idBuf[16];
    if(argc < 2)
-      return "";
+      return KorkApi::ConsoleValue();
    
    if(object->getNamespace())
    {
-      StringTableEntry funcName = StringTable->insert(argv[0]);
+      StringTableEntry funcName = sVM->internString((const char*)argv[0].evaluatePtr(sVM->getAllocBase()));
 
       KorkApi::ConsoleValue retValue = KorkApi::ConsoleValue();
-      KorkApi::ConsoleValue localArgv[StringStack::MaxArgs];
 
       object->pushScriptCallbackGuard();
-      StringStack::convertArgsReverse(sVM->mInternal, argc, argv, localArgv);
-      localArgv[1] = KorkApi::ConsoleValue::makeUnsigned(object->getId());
-      sVM->callObjectFunction(object->getVMObject(), funcName, argc, localArgv, retValue);
+      argv[1] = KorkApi::ConsoleValue::makeUnsigned(object->getId());
+      sVM->callObjectFunction(object->getVMObject(), funcName, argc, argv, retValue);
       object->popScriptCallbackGuard();
 
-      return sVM->valueAsString(retValue);
+      return retValue;
    }
    warnf(ConsoleLogEntry::Script, "Con::execute - %d has no namespace: %s", object->getId(), argv[0]);
-   return "";
-}
-const char *executef(SimObject *object, S32 argc, ...)
-{
-   const char *argv[128];
-
-   va_list args;
-   va_start(args, argc);
-   for(S32 i = 0; i < argc; i++)
-      argv[i+1] = va_arg(args, const char *);
-   va_end(args);
-   argv[0] = argv[1];
-   argc++;
-
-   return execute(object, argc, argv);
-}
-
-//------------------------------------------------------------------------------
-const char *executef(S32 argc, ...)
-{
-   const char *argv[128];
-
-   va_list args;
-   va_start(args, argc);
-   for(S32 i = 0; i < argc; i++)
-      argv[i] = va_arg(args, const char *);
-   va_end(args);
-   return execute(argc, argv);
+   return KorkApi::ConsoleValue();
 }
 
 //------------------------------------------------------------------------------
 bool isFunction(const char *fn)
 {
-   const char *string = StringTable->lookup(fn);
+   StringTableEntry string = sVM->lookupString(fn);
    if(!string)
       return false;
    else
@@ -1239,7 +1245,7 @@ KorkApi::NamespaceId lookupNamespace(const char *ns)
 {
    if(!ns || ns[0] == '\0')
       return sVM->getGlobalNamespace();
-   return sVM->findNamespace(StringTable->insert(ns));
+   return sVM->findNamespace(sVM->internString(ns));
 }
 
 bool linkNamespaces(const char *parent, const char *child)
@@ -1253,8 +1259,8 @@ bool linkNamespaces(const char *parent, const char *child)
 
 bool unlinkNamespaces(const char *parent, const char *child)
 {
-   Namespace *pns = lookupNamespace(parent);
-   Namespace *cns = lookupNamespace(child);
+   KorkApi::NamespaceId pns = lookupNamespace(parent);
+   KorkApi::NamespaceId cns = lookupNamespace(child);
    if(pns && cns)
       return sVM->unlinkNamespaceById(pns, cns);
    return false;
@@ -1265,26 +1271,6 @@ bool classLinkNamespaces(KorkApi::NamespaceId parent, KorkApi::NamespaceId child
    return sVM->linkNamespaceById(parent, child);
 }
 
-void setData(S32 type, void *dptr, S32 index, S32 argc, const char **argv, const EnumTable *tbl, BitSet32 flag)
-{
-#if TOFIX
-   ConsoleBaseType *cbt = ConsoleBaseType::getType(type);
-   AssertFatal(cbt, "Con::setData - could not resolve type ID!");
-   cbt->setData((void *) (((const char *)dptr) + index * cbt->getTypeSize()),argc, argv, tbl, flag);
-#endif
-}
-
-const char *getData(S32 type, void *dptr, S32 index, const EnumTable *tbl, BitSet32 flag)
-{
-#if TOFIX
-   ConsoleBaseType *cbt = ConsoleBaseType::getType(type);
-   AssertFatal(cbt, "Con::getData - could not resolve type ID!");
-   return cbt->getData((void *) (((const char *)dptr) + index * cbt->getTypeSize()), tbl, flag);
-#endif
-   return "";
-}
-
-
 KorkApi::Vm* getVM()
 {
    return sVM;
@@ -1294,8 +1280,8 @@ KorkApi::Vm* getVM()
 
 StringTableEntry getModNameFromPath(const char *path)
 {
-   if(path == NULL || *path == 0)
-      return NULL;
+   if(path == nullptr || *path == 0)
+      return nullptr;
 
    char buf[1024];
    buf[0] = 0;
@@ -1315,10 +1301,10 @@ StringTableEntry getModNameFromPath(const char *path)
             buf[slash - ptr] = 0;
          }
          else
-            return NULL;
+            return nullptr;
       }
       else
-         return NULL;
+         return nullptr;
    }
    else
    {
@@ -1329,10 +1315,10 @@ StringTableEntry getModNameFromPath(const char *path)
          buf[slash - path] = 0;
       }
       else
-         return NULL;
+         return nullptr;
    }
 
-   return StringTable->insert(buf);
+   return sVM->internString(buf);
 }
 
 //-----------------------------------------------------------------------------
@@ -1345,8 +1331,8 @@ static typePathExpandoMap PathExpandos;
 void addPathExpando( const char* pExpandoName, const char* pPath )
 {
    // Sanity!
-   AssertFatal( pExpandoName != NULL, "Expando name cannot be NULL." );
-   AssertFatal( pPath != NULL, "Expando path cannot be NULL." );
+   AssertFatal( pExpandoName != nullptr, "Expando name cannot be nullptr." );
+   AssertFatal( pPath != nullptr, "Expando path cannot be nullptr." );
    
    // Fetch expando name.
    StringTableEntry expandoName = StringTable->insert( pExpandoName );
@@ -1412,7 +1398,7 @@ void addPathExpando( const char* pExpandoName, const char* pPath )
 StringTableEntry getPathExpando( const char* pExpandoName )
 {
    // Sanity!
-   AssertFatal( pExpandoName != NULL, "Expando name cannot be NULL." );
+   AssertFatal( pExpandoName != nullptr, "Expando name cannot be nullptr." );
    
    // Fetch expando name.
    StringTableEntry expandoName = StringTable->insert( pExpandoName );
@@ -1428,7 +1414,7 @@ StringTableEntry getPathExpando( const char* pExpandoName )
    }
    
    // Not found.
-   return NULL;
+   return nullptr;
 }
 
 //-----------------------------------------------------------------------------
@@ -1436,7 +1422,7 @@ StringTableEntry getPathExpando( const char* pExpandoName )
 void removePathExpando( const char* pExpandoName )
 {
    // Sanity!
-   AssertFatal( pExpandoName != NULL, "Expando name cannot be NULL." );
+   AssertFatal( pExpandoName != nullptr, "Expando name cannot be nullptr." );
    
    // Fetch expando name.
    StringTableEntry expandoName = StringTable->insert( pExpandoName );
@@ -1467,7 +1453,7 @@ void removePathExpando( const char* pExpandoName )
 bool isPathExpando( const char* pExpandoName )
 {
    // Sanity!
-   AssertFatal( pExpandoName != NULL, "Expando name cannot be NULL." );
+   AssertFatal( pExpandoName != nullptr, "Expando name cannot be nullptr." );
    
    // Fetch expando name.
    StringTableEntry expandoName = StringTable->insert( pExpandoName );
@@ -1489,7 +1475,7 @@ StringTableEntry getPathExpandoKey( U32 expandoIndex )
 {
    // Finish if index is out of range.
    if ( expandoIndex >= PathExpandos.size() )
-      return NULL;
+      return nullptr;
    
    // Find indexed iterator.
    typePathExpandoMap::iterator expandoItr = PathExpandos.begin();
@@ -1504,7 +1490,7 @@ StringTableEntry getPathExpandoValue( U32 expandoIndex )
 {
    // Finish if index is out of range.
    if ( expandoIndex >= PathExpandos.size() )
-      return NULL;
+      return nullptr;
    
    // Find indexed iterator.
    typePathExpandoMap::iterator expandoItr = PathExpandos.begin();
@@ -1548,7 +1534,7 @@ bool expandPath( char* pDstPath, U32 size, const char* pSrcPath, const char* pWo
       StringTableEntry expandoPath = getPathExpando(pathBuffer);
       
       // Does the expando exist?
-      if( expandoPath == NULL )
+      if( expandoPath == nullptr )
       {
          // No, so error.
          Con::errorf("expandPath() : Could not find path expando '%s' for path '%s'.", pathBuffer, pSrcPath );
@@ -1591,10 +1577,10 @@ bool expandPath( char* pDstPath, U32 size, const char* pSrcPath, const char* pWo
    if ( leadingToken == '.' )
    {
       // Fetch the code-block file-path.
-      const StringTableEntry codeblockFullPath = NULL; // TOFIX CodeBlock::getCurrentCodeBlockFullPath();
+      const StringTableEntry codeblockFullPath = sVM->getCurrentFiberFrameInfo().fullPath;
       
       // Do we have a code block full path?
-      if( codeblockFullPath == NULL )
+      if( codeblockFullPath == nullptr )
       {
          // No, so error.
          Con::errorf("expandPath() : Could not find relative path from code-block for path '%s'.", pSrcPath );
@@ -1656,7 +1642,7 @@ bool expandPath( char* pDstPath, U32 size, const char* pSrcPath, const char* pWo
    
    //Using a special case here because the code below barfs on trying to build a full path for apk reading
 #ifdef TORQUE_OS_ANDROID
-   if (leadingToken == '/' || strstr(pSrcPath, "/") == NULL)
+   if (leadingToken == '/' || strstr(pSrcPath, "/") == nullptr)
       Platform::makeFullPathName( pSrcPath, pathBuffer, sizeof(pathBuffer), pWorkingDirectoryHint );
    else
       dSprintf(pathBuffer, sizeof(pathBuffer), "/%s", pSrcPath);
@@ -1743,7 +1729,7 @@ void collapsePath( char* pDstPath, U32 size, const char* pSrcPath, const char* p
    }
    
    // Fetch the working directory.
-   StringTableEntry workingDirectory = pWorkingDirectoryHint != NULL ? pWorkingDirectoryHint : Platform::getCurrentDirectory();
+   StringTableEntry workingDirectory = pWorkingDirectoryHint != nullptr ? pWorkingDirectoryHint : Platform::getCurrentDirectory();
    
    // Fetch path relative to current directory.
    StringTableEntry relativePath = Platform::makeRelativePathName( pSrcPath, workingDirectory );
@@ -1825,6 +1811,218 @@ bool stripRepeatSlashes( char* pDstPath, const char* pSrcPath, S32 dstSize )
    // Fail!
    return false;
 }
+
+static U32 execDepth = 0;
+static U32 journalDepth = 1;
+
+bool exec(const char* fileName, bool noCalls, bool inJournal)
+{
+   bool journal = false;
+   
+   execDepth++;
+   if(journalDepth >= execDepth)
+      journalDepth = execDepth + 1;
+   else
+      journal = true;
+
+   bool ret = false;
+   KorkApi::Vm* vmPtr = sVM;
+
+   if(inJournal && !journal)
+   {
+      journal = true;
+      journalDepth = execDepth;
+   }
+
+   // Determine the filename we actually want...
+   Con::expandScriptFilename(scriptFilenameBuffer, sizeof(scriptFilenameBuffer), fileName, vmPtr->getCurrentFiberFrameInfo().fullPath);
+
+   const char *ext = dStrrchr(scriptFilenameBuffer, '.');
+
+   if(!ext)
+   {
+      // We need an extension!
+      Con::errorf(ConsoleLogEntry::Script, "exec: invalid script file name %s.", scriptFilenameBuffer);
+      execDepth--;
+      return false;
+   }
+
+   StringTableEntry scriptFileName = vmPtr->internString(scriptFilenameBuffer);
+   StringTableEntry compiledScriptFileName = nullptr;
+
+   // Is this a file we should compile?
+   bool compiled = false;//dStricmp(ext, ".mis") && !journal && !Con::getBoolVariable("Scripts::ignoreDSOs");
+
+   // Ok, we let's try to load and compile the script.
+   bool scriptExists = Platform::isFile(scriptFileName);
+   bool compiledScriptExists = false;
+
+   char nameBuffer[512];
+   char* script = nullptr;
+   U32 scriptSize = 0;
+   U32 version;
+
+   FileStream compiledStream;
+   FileTime comModifyTime, scrModifyTime;
+
+   // If we're supposed to be compiling this file, check to see if there's a DSO
+   if(compiled)
+   {
+      dStrcpyl(nameBuffer, sizeof(nameBuffer), scriptFileName, ".dso", nullptr);
+      compiledScriptFileName = vmPtr->internString(nameBuffer);
+      compiledScriptExists = Platform::isFile(compiledScriptFileName);
+
+      if(compiledScriptExists)
+         Platform::getFileTimes(compiledScriptFileName, nullptr, &comModifyTime);
+      if(scriptExists)
+         Platform::getFileTimes(scriptFileName, nullptr, &scrModifyTime);
+   }
+
+   KorkApi::CompiledBlock loadedBlock = {};
+   KorkApi::CompiledBlock compiledBlock = {};
+
+   // If we had a DSO, let's check to see if we should be reading from it.
+   if(compiled && compiledScriptExists &&
+      (!scriptExists || Platform::compareFileTimes(comModifyTime, scrModifyTime) >= 0))
+   {
+      if (compiledStream.open(nameBuffer, FileStream::Read))
+      {
+         // Check the version!
+         compiledStream.read(&version);
+         if(version != KorkApi::DSOVersion)
+         {
+            Con::warnf("exec: Found an old DSO (%s, ver %d < %d), ignoring.",
+                       nameBuffer, version, KorkApi::DSOVersion);
+            compiledStream.close();
+         }
+         else
+         {
+            compiledStream.setPosition(0);
+            loadedBlock.size = compiledStream.getStreamSize();
+            loadedBlock.data = (U8*)malloc(loadedBlock.size);
+            compiledStream.read(loadedBlock.size, loadedBlock.data);
+         }
+      }
+   }
+
+   if(scriptExists && compiledStream.getStatus() == Stream::Closed)
+   {
+      // If we have source but no compiled version, then we need to compile
+      // (and journal as we do so, if that's required).
+
+      FileStream s;
+
+      if(s.open(scriptFileName, FileStream::Read))
+      {
+         scriptSize = s.getStreamSize();
+         script = new char [scriptSize+1];
+         s.read(scriptSize, script);
+
+         s.close();
+         script[scriptSize] = 0;
+      }
+
+      if (!scriptSize || !script)
+      {
+         delete [] script;
+         Con::errorf(ConsoleLogEntry::Script, "exec: invalid script file %s.", scriptFileName);
+         execDepth--;
+         return false;
+      }
+
+      if(compiled)
+      {
+         // compile this baddie.
+         Con::printf("Compiling %s...", scriptFileName);
+
+         bool errorCond = true;
+
+         if (vmPtr->compileCodeBlock(script, scriptFileName, &compiledBlock))
+         {
+            errorCond = false;
+            if (compiledStream.open(nameBuffer, FileStream::Write))
+            {
+               compiledStream.write(compiledBlock.size, compiledBlock.data);
+               compiledStream.close();
+            }
+            else
+            {
+               Con::errorf("Couldn't write compiled codeblock %s", nameBuffer);
+            }
+         }
+
+         if (errorCond)
+         {
+            // We have to exit out here, as otherwise we get double error reports.
+            delete [] script;
+            execDepth--;
+
+            if (compiledBlock.data)
+            {
+               vmPtr->freeCompiledBlock(compiledBlock);
+               compiledBlock = {};
+            }
+            return false;
+         }
+      }
+   }
+
+   KorkApi::CompiledBlock* correctBlock = compiledBlock.data ? &compiledBlock : &loadedBlock;
+
+   if (correctBlock->data)
+   {
+      // Delete the script object first to limit memory used
+      // during recursive execs.
+      delete [] script;
+      script = 0;
+
+      // We're all compiled, so let's run it.
+      Con::printf("Loading compiled script %s.", scriptFileName);
+      vmPtr->execCodeBlock(correctBlock->size, correctBlock->data, scriptFileName, "", noCalls, 0);
+      vmPtr->clearCurrentFiberError();
+
+      vmPtr->freeCompiledBlock(*correctBlock);
+      *correctBlock = {};
+      ret = true;
+   }
+   else if(script)
+   {
+      // No compiled script,  let's just try executing it
+      // directly... this is either a mission file, or maybe
+      // we're on a readonly volume.
+      Con::printf("Executing %s.", scriptFileName);
+
+      if (vmPtr->compileCodeBlock(script, scriptFileName, &compiledBlock))
+      {
+         vmPtr->execCodeBlock(compiledBlock.size, compiledBlock.data, scriptFileName, "", noCalls, 0);
+         vmPtr->clearCurrentFiberError();
+         vmPtr->freeCompiledBlock(compiledBlock);
+         compiledBlock = {};
+         ret = true;
+      }
+   }
+   else
+   {
+      // Don't have anything.
+      Con::warnf(ConsoleLogEntry::Script, "Missing file: %s!", scriptFileName);
+      ret = false;
+   }
+
+   // This is likely not needed, but here just in case someone screws up
+   if (loadedBlock.data)
+   {
+      free(loadedBlock.data);
+   }
+   if (compiledBlock.data)
+   {
+      vmPtr->freeCompiledBlock(compiledBlock);
+   }
+
+   delete [] script;
+   execDepth--;
+   return ret;
+}
+
 
 } // end of Console namespace
 

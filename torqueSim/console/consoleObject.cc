@@ -21,6 +21,7 @@
 //-----------------------------------------------------------------------------
 
 #include "platform/platform.h"
+#include "platform/platformString.h"
 
 #include "console/console.h"
 #include "console/consoleObject.h"
@@ -31,11 +32,10 @@
 #include "console/typeValidators.h"
 #include "sim/simBase.h"
 
-// TOFIX: add back in if networking needed
 #define INITIAL_CRC_VALUE 0
 
 
-AbstractClassRep *                 AbstractClassRep::classLinkList = NULL;
+AbstractClassRep *                 AbstractClassRep::classLinkList = nullptr;
 static AbstractClassRep::FieldList sg_tempFieldList;
 U32                                AbstractClassRep::NetClassCount  [NetClassGroupsCount][NetClassTypesCount] = {{0, },};
 U32                                AbstractClassRep::NetClassBitSize[NetClassGroupsCount][NetClassTypesCount] = {{0, },};
@@ -52,7 +52,7 @@ const AbstractClassRep::Field *AbstractClassRep::findField(StringTableEntry name
       if(mFieldList[i].pFieldname == name)
          return &mFieldList[i];
 
-   return NULL;
+   return nullptr;
 }
 
 //-----------------------------------------------------------------------------
@@ -63,18 +63,18 @@ AbstractClassRep* AbstractClassRep::findFieldRoot( StringTableEntry fieldName )
     const Field* pField = findField( fieldName );
 
     // Finish if not found.
-    if ( pField == NULL )
-        return NULL;
+    if ( pField == nullptr )
+        return nullptr;
 
     // We're the root if we have no parent.
-    if ( getParentClass() == NULL )
+    if ( getParentClass() == nullptr )
         return this;
 
     // Find the field root via the parent.
     AbstractClassRep* pFieldRoot = getParentClass()->findFieldRoot( fieldName );
 
     // We're the root if the parent does not have it else return the field root.
-    return pFieldRoot == NULL ? this : pFieldRoot;
+    return pFieldRoot == nullptr ? this : pFieldRoot;
 }
 
 //-----------------------------------------------------------------------------
@@ -85,18 +85,18 @@ AbstractClassRep* AbstractClassRep::findContainerChildRoot( AbstractClassRep* pC
     AbstractClassRep* pContainerChildClass = getContainerChildClass( true );
 
     // Finish if not found.
-    if ( pContainerChildClass == NULL )
-        return NULL;
+    if ( pContainerChildClass == nullptr )
+        return nullptr;
 
     // We're the root for the child if we have no parent.
-    if ( getParentClass() == NULL )
+    if ( getParentClass() == nullptr )
         return this;
 
     // Find child in parent.
     AbstractClassRep* pParentContainerChildClass = getParentClass()->findContainerChildRoot( pChild );
 
     // We;re the root if the parent does not contain the child else return the container root.
-    return pParentContainerChildClass == NULL ? this : pParentContainerChildClass;
+    return pParentContainerChildClass == nullptr ? this : pParentContainerChildClass;
 }
 
 //-----------------------------------------------------------------------------
@@ -110,13 +110,13 @@ AbstractClassRep* AbstractClassRep::findClassRep(const char* in_pClassName)
       if (dStricmp(walk->getClassName(), in_pClassName) == 0)
          return walk;
 
-   return NULL;
+   return nullptr;
 }
 
 //--------------------------------------
 void AbstractClassRep::registerClassRep(AbstractClassRep* in_pRep)
 {
-   AssertFatal(in_pRep != NULL, "AbstractClassRep::registerClassRep was passed a NULL pointer!");
+   AssertFatal(in_pRep != nullptr, "AbstractClassRep::registerClassRep was passed a nullptr pointer!");
 
 #ifdef TORQUE_DEBUG  // assert if this class is already registered.
    for(AbstractClassRep *walk = classLinkList; walk; walk = walk->nextClass)
@@ -142,7 +142,7 @@ ConsoleObject* AbstractClassRep::create(const char* in_pClassName)
       return rep->create();
 
    AssertWarn(0, avar("Couldn't find class rep for dynamic class: %s", in_pClassName));
-   return NULL;
+   return nullptr;
 }
 
 //--------------------------------------
@@ -152,26 +152,35 @@ ConsoleObject* AbstractClassRep::create(const U32 groupId, const U32 typeId, con
       "AbstractClassRep::create() - Tried to create an object before AbstractClassRep::initialize().");
    AssertFatal(in_classId < NetClassCount[groupId][typeId],
       "AbstractClassRep::create() - Class id out of range.");
-   AssertFatal(classTable[groupId][typeId][in_classId] != NULL,
+   AssertFatal(classTable[groupId][typeId][in_classId] != nullptr,
       "AbstractClassRep::create() - No class with requested ID type.");
 
    // Look up the specified class and create it.
    if(classTable[groupId][typeId][in_classId])
       return classTable[groupId][typeId][in_classId]->create();
 
-   return NULL;
+   return nullptr;
 }
 
 //--------------------------------------
 
+//
+
+namespace KorkApi
+{
+TypeStorageInterface CreateExprEvalReturnTypeStorage(KorkApi::VmInternal* vmInternal, U32 minSize, U16 typeId);
+TypeStorageInterface CreateRegisterStorageFromArgs(KorkApi::VmInternal* vmInternal, U32 argc, KorkApi::ConsoleValue* argv);
+}
+
 void AbstractClassRep::registerClassWithVm(KorkApi::Vm* vm)
 {
-   if (mClassInfo.name == NULL)
+   if (mClassInfo.name == nullptr)
    {
-      mClassInfo.name = StringTable->insert(mClassName);
+      
+      mClassInfo.name = vm->internString(mClassName);
       mClassInfo.userPtr = this;
       mClassInfo.numFields = mFieldList.size();
-      mClassInfo.fields = &mFieldList[0];
+      mClassInfo.fields = mFieldList.empty() ? nullptr : &mFieldList[0];
       // Create & Destroy
       mClassInfo.iCreate.CreateClassFn = [](void* user, KorkApi::Vm* vm, KorkApi::CreateClassReturn* outP){
          AbstractClassRep* rep = static_cast<AbstractClassRep*>(user);
@@ -211,7 +220,7 @@ void AbstractClassRep::registerClassWithVm(KorkApi::Vm* vm)
                //currentNewObject->setOriginalName( objectName );
             }
             
-            /* TOFIX: TGE seems to set these flags in Datablock regardless!
+            /* NOTE: TGE seems to set these flags in Datablock regardless!
             if (!isDatablock)
             {
                vmObject->flags |= KorkApi::ModStaticFields | KorkApi::ModDynamicFields;
@@ -221,7 +230,7 @@ void AbstractClassRep::registerClassWithVm(KorkApi::Vm* vm)
          }
          else
          {
-            object->setupVM(NULL, NULL);
+            object->setupVM(nullptr, nullptr);
          }
          
          return false;
@@ -253,8 +262,8 @@ void AbstractClassRep::registerClassWithVm(KorkApi::Vm* vm)
          }
          
          // What group will we be added to, if any?
-         SimGroup *grp = NULL;
-         SimSet   *set = NULL;
+         SimGroup *grp = nullptr;
+         SimSet   *set = nullptr;
          
          if(!placeAtRoot || !currentNewObject->getGroup())
          {
@@ -305,9 +314,9 @@ void AbstractClassRep::registerClassWithVm(KorkApi::Vm* vm)
       // Custom fields
       mClassInfo.iCustomFields = {};
       mClassInfo.iCustomFields.IterateFields = [](KorkApi::Vm* vm, KorkApi::VMObject* vmObject, KorkApi::VMIterator& state, StringTableEntry* name){
-         SimObject* object = NULL;
+         SimObject* object = nullptr;
          
-         if (state.userObject == NULL)
+         if (state.userObject == nullptr)
          {
             // New Iterator
             ConsoleObject* consoleObject = static_cast<ConsoleObject*>(vmObject->userPtr);
@@ -324,21 +333,21 @@ void AbstractClassRep::registerClassWithVm(KorkApi::Vm* vm)
             itr.toVMItr(state);
          }
 
-         if (state.internalEntry != NULL)
+         if (state.internalEntry != nullptr)
          {
             *name = ((SimFieldDictionary::Entry*)state.internalEntry)->slotName;
             return true;
          }
          else
          {
-            *name = NULL;
+            *name = nullptr;
             return false;
          }
       };
       mClassInfo.iCustomFields.GetFieldByIterator = [](KorkApi::Vm* vm, KorkApi::VMObject* object, KorkApi::VMIterator& state){
          KorkApi::ConsoleValue cv = KorkApi::ConsoleValue();
 
-         if (state.userObject != NULL)
+         if (state.userObject != nullptr)
          {
             // Advance iterator
             SimFieldDictionaryIterator itr(state);
@@ -354,14 +363,29 @@ void AbstractClassRep::registerClassWithVm(KorkApi::Vm* vm)
          KorkApi::ConsoleValue cv = KorkApi::ConsoleValue();
          ConsoleObject* consoleObject = static_cast<ConsoleObject*>(vmObject->userPtr);
          SimObject* object = dynamic_cast<SimObject*>(consoleObject);
-         const char* val = object->getDataFieldDynamic(StringTable->insert(name), NULL);
-         return KorkApi::ConsoleValue::makeString(val);
+         U32 typeId = 0;
+         const char* val = object->getDataFieldDynamic(StringTable->insert(name), nullptr, &typeId);
+         // This will be a string, so we need to convert it
+         KorkApi::ConsoleValue strValue = KorkApi::ConsoleValue::makeString(val);
+         return vm->castToReturn(1, &strValue, typeId, typeId); // loaded as typeId, stored as typeid
       };
-      mClassInfo.iCustomFields.SetFieldByName = [](KorkApi::Vm* vm, KorkApi::VMObject* vmObject, const char* name, KorkApi::ConsoleValue value){
+      mClassInfo.iCustomFields.SetCustomFieldByName = [](KorkApi::Vm* vm, KorkApi::VMObject* vmObject, const char* name, const char* array, U32 argc, KorkApi::ConsoleValue* argv){
          ConsoleObject* consoleObject = static_cast<ConsoleObject*>(vmObject->userPtr);
          SimObject* object = dynamic_cast<SimObject*>(consoleObject);
-         object->setDataFieldDynamic(StringTable->insert(name), vm->valueAsString(value), NULL); // TODO
+         
+         U32 typeId = 0;
+         StringTableEntry steName = StringTable->insert(name);
+         const char* val = object->getDataFieldDynamic(StringTable->insert(name), nullptr, &typeId);
+         KorkApi::ConsoleValue castValue = vm->castToReturn(argc, argv, typeId, KorkApi::ConsoleValue::TypeInternalString);  // loaded as typeId, stored as string
+         object->setDataFieldDynamic(StringTable->insert(name), array, (const char*)castValue.evaluatePtr(vm->getAllocBase()), UINT_MAX);
       };
+      mClassInfo.iCustomFields.SetCustomFieldType = [](KorkApi::Vm* vm, KorkApi::VMObject* vmObject, const char* name, const char* array, U32 typeId){
+         ConsoleObject* consoleObject = static_cast<ConsoleObject*>(vmObject->userPtr);
+         SimObject* object = dynamic_cast<SimObject*>(consoleObject);
+         object->setDataFieldDynamic(StringTable->insert(name), array, "", typeId);
+         return true;
+      };
+      
       // Enumeration
       mClassInfo.iEnum = {};
       mClassInfo.iEnum.GetSize = [](KorkApi::VMObject* vmObject){
@@ -372,11 +396,23 @@ void AbstractClassRep::registerClassWithVm(KorkApi::Vm* vm)
       mClassInfo.iEnum.GetObjectAtIndex = [](KorkApi::VMObject* vmObject, U32 index){
          ConsoleObject* consoleObject = static_cast<ConsoleObject*>(vmObject->userPtr);
          SimSet* object = dynamic_cast<SimSet*>(consoleObject);
-         return object ? object->at(index)->getVMObject() : (KorkApi::VMObject*)NULL;
+         return object ? object->at(index)->getVMObject() : (KorkApi::VMObject*)nullptr;
       };
    }
    
    mLastRegisteredVmId = vm->registerClass(mClassInfo);
+}
+
+void AbstractClassRep::linkClassWithParent(KorkApi::Vm* vm)
+{
+   AbstractClassRep* parentKlass = getParentClass();
+
+   // Link namespace
+   if (parentKlass)
+   {
+      vm->linkNamespace(parentKlass->mClassInfo.name,
+                        mClassInfo.name);
+   }
 }
 
 //--------------------------------------
@@ -392,14 +428,14 @@ bool ACRCompare(const AbstractClassRep* a, const AbstractClassRep* b)
 void AbstractClassRep::initialize()
 {
    AssertFatal(!initialized, "Duplicate call to AbstractClassRep::initialize()!");
-   Vector<AbstractClassRep *> dynamicTable(__FILE__, __LINE__);
+   std::vector<AbstractClassRep *> dynamicTable;
 
    AbstractClassRep *walk;
 
    // Initialize namespace references...
    for (walk = classLinkList; walk; walk = walk->nextClass)
    {
-      walk->mNamespace = Con::lookupNamespace(StringTable->insert(walk->getClassName()));
+      //walk->mNamespace = Con::lookupNamespace(StringTable->insert(walk->getClassName()));
       //walk->mNamespace->mClassRep = walk;
    }
 
@@ -408,7 +444,7 @@ void AbstractClassRep::initialize()
    {
       // sg_tempFieldList is used as a staging area for field lists
       // (see addField, addGroup, etc.)
-      sg_tempFieldList.setSize(0);
+      sg_tempFieldList.resize(0);
 
       walk->init();
 
@@ -416,9 +452,9 @@ void AbstractClassRep::initialize()
       if (sg_tempFieldList.size() != 0)
       {
          if( !walk->mFieldList.size())
+         {
             walk->mFieldList = sg_tempFieldList;
-         else
-            destroyFieldValidators( sg_tempFieldList );
+         }
       }
 
       // And of course delete it every round.
@@ -471,18 +507,6 @@ void AbstractClassRep::initialize()
 
 }
 
-void AbstractClassRep::destroyFieldValidators( AbstractClassRep::FieldList &mFieldList )
-{
-   for(S32 i = mFieldList.size()-1; i>=0; i-- )
-   {
-      TypeValidator **p = &mFieldList[i].validator;
-      if( *p )
-      {
-         delete *p;
-         *p = NULL;
-      }
-   }
-}
 
 //------------------------------------------------------------------------------
 //-------------------------------------- ConsoleObject
@@ -517,15 +541,16 @@ void ConsoleObject::addGroup(const char* in_pGroupname, const char* in_pGroupDoc
    if(in_pGroupDocs)
       f.pFieldDocs   = StringTable->insert(in_pGroupDocs);
    else
-      f.pFieldDocs   = NULL;
+      f.pFieldDocs   = nullptr;
 
    f.type         = AbstractClassRep::StartGroupFieldType;
    f.elementCount = 0;
    f.groupExpand  = false;
-   f.validator    = NULL;
-   f.ovrSetValue  = NULL;
-   f.ovrCopyValue = NULL;
+   f.fieldUserPtr = nullptr;
+   f.ovrCastValue = nullptr;
    f.writeDataFn  = &defaultProtectedWriteFn;
+   f.allocStorageFn  = nullptr;
+   f.enumKeysFn   = nullptr;
 
    // Add to field list.
    sg_tempFieldList.push_back(f);
@@ -543,13 +568,14 @@ void ConsoleObject::endGroup(const char*  in_pGroupname)
    AbstractClassRep::Field f;
    f.pFieldname   = StringTable->insert(pFieldNameBuf);
    f.pGroupname   = StringTable->insert(in_pGroupname);
-   f.pFieldDocs   = NULL;
+   f.pFieldDocs   = nullptr;
    f.type         = AbstractClassRep::EndGroupFieldType;
    f.groupExpand  = false;
-   f.validator    = NULL;
-   f.ovrSetValue  = NULL;
-   f.ovrCopyValue = NULL;
+   f.fieldUserPtr = nullptr;
+   f.ovrCastValue = nullptr;
    f.writeDataFn  = &defaultProtectedWriteFn;
+   f.allocStorageFn  = nullptr;
+   f.enumKeysFn   = nullptr;
    f.elementCount = 0;
 
    // Add to field list.
@@ -567,7 +593,7 @@ void ConsoleObject::addField(const char*  in_pFieldname,
       in_fieldOffset,
       &defaultProtectedWriteFn,
       1,
-      NULL,
+      nullptr,
       in_pFieldDocs);
 }
 
@@ -583,7 +609,7 @@ void ConsoleObject::addField(const char*  in_pFieldname,
       in_fieldOffset,
       in_writeDataFn,
       1,
-      NULL,
+      nullptr,
       in_pFieldDocs);
 }
 
@@ -615,22 +641,22 @@ void ConsoleObject::addField(const char*  in_pFieldname,
    AbstractClassRep::Field f;
    
    f.pFieldname   = StringTable->insert(in_pFieldname);
-   f.pGroupname   = NULL;
+   f.pGroupname   = nullptr;
 
    if(in_pFieldDocs)
       f.pFieldDocs   = StringTable->insert(in_pFieldDocs);
    else
-      f.pFieldDocs   = NULL;
+      f.pFieldDocs   = nullptr;
 
    f.type         = in_fieldType;
    f.offset       = in_fieldOffset;
    f.elementCount = in_elementCount;
-   f.table        = in_table;
-   f.validator    = NULL;
+   f.fieldUserPtr = in_table;
    
-   f.ovrSetValue  = NULL;
-   f.ovrCopyValue = NULL;
+   f.ovrCastValue = nullptr;
    f.writeDataFn  = in_writeDataFn;
+   f.allocStorageFn  = nullptr;
+   f.enumKeysFn   = nullptr;
 
    sg_tempFieldList.push_back(f);
 }
@@ -638,27 +664,26 @@ void ConsoleObject::addField(const char*  in_pFieldname,
 void ConsoleObject::addProtectedField(const char*  in_pFieldname,
                        const U32 in_fieldType,
                        const dsize_t in_fieldOffset,
-                       AbstractClassRep::SetValue in_setDataFn,
-                       AbstractClassRep::CopyValue in_getDataFn,
+                       AbstractClassRep::CastValue in_getDataFn,
                        const char* in_pFieldDocs)
 {
    addProtectedField(
       in_pFieldname,
       in_fieldType,
       in_fieldOffset,
-      in_setDataFn,
       in_getDataFn,
+      nullptr,
+      nullptr,
       &defaultProtectedWriteFn,
       1,
-      NULL,
+      nullptr,
       in_pFieldDocs);
 }
 
 void ConsoleObject::addProtectedField(const char*  in_pFieldname,
                        const U32 in_fieldType,
                        const dsize_t in_fieldOffset,
-                                      AbstractClassRep::SetValue in_setDataFn,
-                                      AbstractClassRep::CopyValue in_getDataFn,
+                                      AbstractClassRep::CastValue in_getDataFn,
                        AbstractClassRep::WriteDataNotify in_writeDataFn,
                        const char* in_pFieldDocs)
 {
@@ -666,19 +691,19 @@ void ConsoleObject::addProtectedField(const char*  in_pFieldname,
       in_pFieldname,
       in_fieldType,
       in_fieldOffset,
-      in_setDataFn,
       in_getDataFn,
+      nullptr,
+      nullptr,
       in_writeDataFn,
       1,
-      NULL,
+      nullptr,
       in_pFieldDocs);
 }
 
 void ConsoleObject::addProtectedField(const char*  in_pFieldname,
                        const U32 in_fieldType,
                        const dsize_t in_fieldOffset,
-                                      AbstractClassRep::SetValue in_setDataFn,
-                                      AbstractClassRep::CopyValue in_getDataFn,
+                                      AbstractClassRep::CastValue in_getDataFn,
                        const U32 in_elementCount,
                        EnumTable *in_table,
                        const char* in_pFieldDocs)
@@ -687,8 +712,9 @@ void ConsoleObject::addProtectedField(const char*  in_pFieldname,
       in_pFieldname,
       in_fieldType,
       in_fieldOffset,
-      in_setDataFn,
       in_getDataFn,
+      nullptr,
+      nullptr,
       &defaultProtectedWriteFn,
       in_elementCount,
       in_table,
@@ -698,8 +724,9 @@ void ConsoleObject::addProtectedField(const char*  in_pFieldname,
 void ConsoleObject::addProtectedField(const char*  in_pFieldname,
                        const U32 in_fieldType,
                        const dsize_t in_fieldOffset,
-                                      AbstractClassRep::SetValue in_setDataFn,
-                                      AbstractClassRep::CopyValue in_getDataFn,
+                       AbstractClassRep::CastValue in_getDataFn,
+                       AbstractClassRep::AllocFieldStorage  in_allocStorageFn,
+                       AbstractClassRep::EnumerateFieldKeys in_enumerateKeysFn,
                        AbstractClassRep::WriteDataNotify in_writeDataFn,
                        const U32 in_elementCount,
                        EnumTable *in_table,
@@ -707,22 +734,22 @@ void ConsoleObject::addProtectedField(const char*  in_pFieldname,
 {
    AbstractClassRep::Field f;
    f.pFieldname   = StringTable->insert(in_pFieldname);
-   f.pGroupname   = NULL;
+   f.pGroupname   = nullptr;
 
    if(in_pFieldDocs)
       f.pFieldDocs   = StringTable->insert(in_pFieldDocs);
    else
-      f.pFieldDocs   = NULL;
+      f.pFieldDocs   = nullptr;
 
    f.type         = in_fieldType;
    f.offset       = in_fieldOffset;
    f.elementCount = in_elementCount;
-   f.table        = in_table;
-   f.validator    = NULL;
+   f.fieldUserPtr = in_table;
 
-   f.ovrSetValue    = in_setDataFn;
-   f.ovrCopyValue    = in_getDataFn;
+   f.ovrCastValue    = in_getDataFn;
    f.writeDataFn  = in_writeDataFn;
+   f.allocStorageFn  = in_allocStorageFn;
+   f.enumKeysFn   = in_enumerateKeysFn;
 
    sg_tempFieldList.push_back(f);
 }
@@ -735,19 +762,17 @@ void ConsoleObject::addFieldV(const char*  in_pFieldname,
 {
    AbstractClassRep::Field f;
    f.pFieldname   = StringTable->insert(in_pFieldname);
-   f.pGroupname   = NULL;
+   f.pGroupname   = nullptr;
    if(in_pFieldDocs)
       f.pFieldDocs   = StringTable->insert(in_pFieldDocs);
    else
-      f.pFieldDocs   = NULL;
+      f.pFieldDocs   = nullptr;
    f.type         = in_fieldType;
    f.offset       = in_fieldOffset;
    f.elementCount = 1;
-   f.table        = NULL;
-   f.ovrSetValue  = NULL;
-   f.ovrCopyValue = NULL;
+   f.fieldUserPtr = nullptr;
    f.writeDataFn  = &defaultProtectedWriteFn;
-   f.validator    = v;
+   f.fieldUserPtr = v;
    v->fieldIndex  = sg_tempFieldList.size();
 
    sg_tempFieldList.push_back(f);
@@ -757,16 +782,16 @@ void ConsoleObject::addDepricatedField(const char *fieldName)
 {
    AbstractClassRep::Field f;
    f.pFieldname   = StringTable->insert(fieldName);
-   f.pGroupname   = NULL;
-   f.pFieldDocs   = NULL;
+   f.pGroupname   = nullptr;
+   f.pFieldDocs   = nullptr;
    f.type         = AbstractClassRep::DepricatedFieldType;
    f.offset       = 0;
    f.elementCount = 0;
-   f.table        = NULL;
-   f.validator    = NULL;
-   f.ovrSetValue  = NULL;
-   f.ovrCopyValue = NULL;
+   f.fieldUserPtr = nullptr;
+   f.ovrCastValue = nullptr;
    f.writeDataFn  = &defaultProtectedWriteFn;
+   f.allocStorageFn  = nullptr;
+   f.enumKeysFn   = nullptr;
 
    sg_tempFieldList.push_back(f);
 }
@@ -776,7 +801,7 @@ bool ConsoleObject::removeField(const char* in_pFieldname)
 {
    for (U32 i = 0; i < (U32)sg_tempFieldList.size(); i++) {
       if (dStricmp(in_pFieldname, sg_tempFieldList[i].pFieldname) == 0) {
-         sg_tempFieldList.erase(i);
+         sg_tempFieldList.erase(sg_tempFieldList.begin() + i);
          return true;
       }
    }
@@ -801,7 +826,7 @@ ConsoleObject::~ConsoleObject()
 //--------------------------------------
 AbstractClassRep* ConsoleObject::getClassRep() const
 {
-   return NULL;
+   return nullptr;
 }
 
 
@@ -810,6 +835,12 @@ void AbstractClassRep::registerWithVM(KorkApi::Vm* vm)
    for (AbstractClassRep* walk = classLinkList; walk; walk = walk->nextClass)
    {
       walk->registerClassWithVm(vm);
+   }
+
+   // Link parent classes
+   for (AbstractClassRep* walk = classLinkList; walk; walk = walk->nextClass)
+   {
+      walk->linkClassWithParent(vm);
    }
 }
 

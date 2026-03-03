@@ -1,4 +1,34 @@
 #pragma once
+//-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
+// Copyright (c) 2013 GarageGames, LLC
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to
+// deal in the Software without restriction, including without limitation the
+// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+// sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+// IN THE SOFTWARE.
+//-----------------------------------------------------------------------------
+
+
 #include "console/consoleInternal.h"
 #include "embed/api.h"
 #include "embed/internalApi.h"
@@ -18,12 +48,11 @@ class Namespace
 
    Namespace *mParent;
    Namespace *mNext;
-   //AbstractClassRep *mClassRep;
+   void* mUserPtr;
    U32 mRefCountToParent;
+   
    const char* mUsage;
-   // Script defined usage strings need to be cleaned up. This
-   // field indicates whether or not the usage was set from script.
-   bool mCleanUpUsage;
+   KorkApi::String mDynamicUsage;
 
    struct Entry
    {
@@ -47,6 +76,7 @@ class Namespace
       S32 mMinArgs;
       S32 mMaxArgs;
       const char *mUsage;
+      KorkApi::String mDynamicUsage;
       StringTableEntry mPackage;
       void* mUserPtr;
 
@@ -65,6 +95,11 @@ class Namespace
       void clear();
 
       KorkApi::ConsoleValue execute(S32 argc, KorkApi::ConsoleValue* argv, ExprEvalState *state, KorkApi::VMObject* resolvedThis, bool startSuspended=false);
+      
+      const char* getUsage()
+      {
+         return mUsage ? mUsage : mDynamicUsage.c_str();
+      }
    };
    Entry *mEntryList;
 
@@ -77,7 +112,7 @@ class Namespace
    ~Namespace();
 
    void initVM(KorkApi::VmInternal* vm);
-   void addFunction(StringTableEntry name, CodeBlock *cb, U32 functionOffset, const char* usage = NULL);
+   void addFunction(StringTableEntry name, CodeBlock *cb, U32 functionOffset, const char* usage = nullptr);
    void addCommand(StringTableEntry name, KorkApi::StringFuncCallback, void* userPtr, const char* usage, S32 minArgs, S32 maxArgs);
    void addCommand(StringTableEntry name, KorkApi::IntFuncCallback, void* userPtr, const char* usage, S32 minArgs, S32 maxArgs);
    void addCommand(StringTableEntry name, KorkApi::FloatFuncCallback, void* userPtr, const char* usage, S32 minArgs, S32 maxArgs);
@@ -85,13 +120,16 @@ class Namespace
    void addCommand(StringTableEntry name, KorkApi::BoolFuncCallback, void* userPtr, const char* usage, S32 minArgs, S32 maxArgs);
    void addCommand(StringTableEntry name, KorkApi::ValueFuncCallback, void* userPtr, const char* usage, S32 minArgs, S32 maxArgs);
 
-   void addOverload(const char *name, const char* altUsage);
-
    void markGroup(const char* name, const char* usage);
    char * lastUsage;
 
-   void getEntryList(Vector<Entry *> *);
-
+   void getEntryList(KorkApi::Vector<Entry *> *);
+   
+   const char* getUsage()
+   {
+      return mUsage ? mUsage : mDynamicUsage.c_str();
+   }
+   
    Entry *lookup(StringTableEntry name);
    Entry *lookupRecursive(StringTableEntry name);
    Entry *createLocalEntry(StringTableEntry name);
@@ -113,8 +151,8 @@ struct NamespaceState
    KorkApi::VmInternal* mVmInternal;
    Namespace *mNamespaceList;
    Namespace *mGlobalNamespace;
-   DataChunker mCacheAllocator;
-   DataChunker mAllocator;
+   KorkApi::VMChunker mCacheAllocator;
+   KorkApi::VMChunker mAllocator;
    U32 mCacheSequence;
    U32 mNumActivePackages;
    U32 mOldNumActivePackages;
@@ -123,7 +161,8 @@ struct NamespaceState
    NamespaceState();
    void trashCache();
    
-   Namespace *find(StringTableEntry name, StringTableEntry package=NULL);
+   Namespace *find(StringTableEntry name, StringTableEntry package=nullptr);
+   Namespace *lookup(StringTableEntry name, StringTableEntry package=nullptr);
    bool canTabComplete(const char *prevText, const char *bestMatch, const char *newText, S32 baseLen, bool fForward);
 
    // Packages

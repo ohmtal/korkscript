@@ -1,4 +1,11 @@
 //-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
 // Copyright (c) 2013 GarageGames, LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -33,7 +40,11 @@ class VmInternal;
 }
 
 class Stream;
+class Namespace;
+class CodeStream;
+
 struct ConsoleFrame;
+struct ExprEvalState;
 
 
 /// Core TorqueScript code management class.
@@ -80,9 +91,17 @@ public:
    StringTableEntry* identStrings;
    U32* identStringOffsets;
    U32 numIdentStrings;
+   
+   U32 numFunctionCalls;
+   void** functionCalls;
+
+   U32 startTypeStrings;
+   U32 numTypeStrings;
+   S32* typeStringMap;
 
    bool isExecBlock;
    bool inList;
+   bool didFlushFunctions;
    
    void addToCodeList();
    void removeFromCodeList();
@@ -90,7 +109,7 @@ public:
    void clearAllBreaks();
    void setAllBreaks();
    
-   void dumpInstructions( U32 startIp = 0, bool upToReturn = false, bool downcaseStrings = false );
+   void dumpInstructions( U32 startIp = 0, bool upToReturn = false, bool downcaseStrings = false, bool includeLines = false );
    
    /// Returns the first breakable line or 0 if none was found.
    /// @param lineNumber The one based line number.
@@ -106,11 +125,18 @@ public:
    void findBreakLine(U32 ip, U32 &line, U32 &instruction);
    void getFunctionArgs(char buffer[1024], U32 offset);
    const char *getFileLine(U32 ip);
+   const char *getFileLineInt(U32 ip);
    
-   bool read(StringTableEntry fileName, bool readVersion, Stream &st);
+   void* getNSEntry(U32 index);
+   void setNSEntry(U32 index, void* entry);
+   void flushNSEntries();
+   
+   bool read(StringTableEntry fileName, StringTableEntry modPath, Stream &st, U32 readVersion);
+   bool linkTypes();
+   StringTableEntry getTypeName(U32 typeID);
+   U32 getRealTypeID(U32 typeID);
    bool write(Stream &st);
    
-   bool compile(const char *dsoName, StringTableEntry fileName, const char *script);
    bool compileToStream(Stream& s, StringTableEntry fileName, const char *script);
    
    void incRefCount();
@@ -131,7 +157,8 @@ public:
    /// with, zero being the top of the stack. If the the index is
    /// -1 a new frame is created. If the index is out of range the
    /// top stack frame is used.
-    KorkApi::ConsoleValue compileExec(StringTableEntry fileName, const char *script,
+    KorkApi::ConsoleValue compileExec(StringTableEntry fileName, StringTableEntry inModPath,
+                           const char *script,
                            bool noCalls, bool isNativeFrame=true, int setFrame = -1 );
    
    ConsoleFrame& setupExecFrame(ExprEvalState& eval,

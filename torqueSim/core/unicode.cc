@@ -21,9 +21,10 @@
 //-----------------------------------------------------------------------------
 
 #include "platform/platform.h"
+#include "platform/platformString.h"
 #include "platform/platformAssert.h"
 #include "core/unicode.h"
-#include "core/tempAlloc.h"
+#include "console/stlTypes.h"
 #include <stdio.h>
 
 //-----------------------------------------------------------------------------
@@ -221,17 +222,17 @@ UTF16* convertUTF8toUTF16( const UTF8* unistring)
    PROFILE_START(convertUTF8toUTF16_create);
    // allocate plenty of memory.
    U32 nCodepoints, len = dStrlen(unistring) + 1;
-   TempAlloc<UTF16> buf(len);
+   std::vector<UTF16> bufV(len); UTF16* buf = bufV.data();
    
    // perform conversion
    nCodepoints = convertUTF8toUTF16( unistring, buf, len);
    
-   // add 1 for the NULL terminator the converter promises it included.
+   // add 1 for the nullptr terminator the converter promises it included.
    nCodepoints++;
    
    // allocate the return buffer, copy over, and return it.
-   UTF16 *ret = new UTF16[nCodepoints];
-   dMemcpy(ret, buf, nCodepoints * sizeof(UTF16));
+   UTF16 *ret = KorkApi::VMem::NewArray<UTF16>(nCodepoints);
+   memcpy(ret, buf, nCodepoints * sizeof(UTF16));
    
    PROFILE_END();
    return ret;
@@ -243,17 +244,17 @@ UTF32* convertUTF8toUTF32( const UTF8* unistring)
    PROFILE_START(convertUTF8toUTF32_create);
    // allocate plenty of memory.
    U32 nCodepoints, len = dStrlen(unistring) + 1;
-   TempAlloc<UTF32> buf(len);
+   std::vector<UTF32> bufV(len); UTF32* buf = bufV.data();
    
    // perform conversion
    nCodepoints = convertUTF8toUTF32( unistring, buf, len);
    
-   // add 1 for the NULL terminator the converter promises it included.
+   // add 1 for the nullptr terminator the converter promises it included.
    nCodepoints++;
    
    // allocate the return buffer, copy over, and return it.
-   UTF32 *ret = new UTF32[nCodepoints];
-   dMemcpy(ret, buf, nCodepoints * sizeof(UTF32));
+   UTF32 *ret = KorkApi::VMem::NewArray<UTF32>(nCodepoints);
+   memcpy(ret, buf, nCodepoints * sizeof(UTF32));
    
    PROFILE_END();
    return ret;
@@ -266,17 +267,17 @@ UTF8*  convertUTF16toUTF8( const UTF16* unistring)
    PROFILE_START(convertUTF16toUTF8_create);
    // allocate plenty of memory.
    U32 nCodeunits, len = dStrlen(unistring) * 3 + 1;
-   TempAlloc<UTF8> buf(len);
+   std::vector<UTF8> bufV(len); UTF8* buf = bufV.data();
    
    // perform conversion
    nCodeunits = convertUTF16toUTF8( unistring, buf, len);
    
-   // add 1 for the NULL terminator the converter promises it included.
+   // add 1 for the nullptr terminator the converter promises it included.
    nCodeunits++;
    
    // allocate the return buffer, copy over, and return it.
-   UTF8 *ret = new UTF8[nCodeunits];
-   dMemcpy(ret, buf, nCodeunits * sizeof(UTF8));
+   UTF8 *ret = KorkApi::VMem::NewArray<UTF8>(nCodeunits);
+   memcpy(ret, buf, nCodeunits * sizeof(UTF8));
 
    PROFILE_END();
    return ret;
@@ -288,17 +289,17 @@ UTF32* convertUTF16toUTF32(const UTF16* unistring)
    PROFILE_START(convertUTF16toUTF32_create);
    // allocate plenty of memory.
    U32 nCodepoints, len = dStrlen(unistring) + 1;
-   TempAlloc<UTF32> buf(len);
+   std::vector<UTF32> bufV(len); UTF32* buf = bufV.data();
    
    // perform conversion
    nCodepoints = convertUTF16toUTF32( unistring, buf, len);
    
-   // add 1 for the NULL terminator the converter promises it included.
+   // add 1 for the nullptr terminator the converter promises it included.
    nCodepoints++;
    
    // allocate the return buffer, copy over, and return it.
-   UTF32 *ret = new UTF32[nCodepoints];
-   dMemcpy(ret, buf, nCodepoints * sizeof(UTF32));
+   UTF32 *ret = KorkApi::VMem::NewArray<UTF32>(nCodepoints);
+   memcpy(ret, buf, nCodepoints * sizeof(UTF32));
 
    PROFILE_END();
    return ret;
@@ -310,17 +311,17 @@ UTF8*  convertUTF32toUTF8( const UTF32* unistring)
    PROFILE_START(convertUTF32toUTF8_create);
    // allocate plenty of memory.
    U32 nCodeunits, len = dStrlen(unistring) * 3 + 1;
-   TempAlloc<UTF8> buf(len);
+   std::vector<UTF8> bufV(len); UTF8* buf = bufV.data();
    
    // perform conversion
    nCodeunits = convertUTF32toUTF8( unistring, buf, len);
    
-   // add 1 for the NULL terminator the converter promises it included.
+   // add 1 for the nullptr terminator the converter promises it included.
    nCodeunits++;
    
    // allocate the return buffer, copy over, and return it.
-   UTF8 *ret = new UTF8[nCodeunits];
-   dMemcpy(ret, buf, nCodeunits * sizeof(UTF8));
+   UTF8 *ret = KorkApi::VMem::NewArray<UTF8>(nCodeunits);
+   memcpy(ret, buf, nCodeunits * sizeof(UTF8));
 
    PROFILE_END();
    return ret;
@@ -332,17 +333,17 @@ UTF16* convertUTF32toUTF16(const UTF32* unistring)
    PROFILE_START(convertUTF32toUTF16_create);
    // allocate plenty of memory.
    U32 nCodepoints, len = dStrlen(unistring) + 1;
-   TempAlloc<UTF16> buf(len);
+   std::vector<UTF16> bufV(len); UTF16* buf = bufV.data();;
    
    // perform conversion
    nCodepoints = convertUTF32toUTF16( unistring, buf, len);
    
-   // add 1 for the NULL terminator the converter promises it included.
+   // add 1 for the nullptr terminator the converter promises it included.
    nCodepoints++;
    
    // allocate the return buffer, copy over, and return it.
-   UTF16 *ret = new UTF16[nCodepoints];
-   dMemcpy(ret, buf, nCodepoints * sizeof(UTF16));
+   UTF16 *ret = KorkApi::VMem::NewArray<UTF16>(nCodepoints);
+   memcpy(ret, buf, nCodepoints * sizeof(UTF16));
 
    PROFILE_END();
    return ret;
@@ -407,7 +408,7 @@ const UTF32 oneUTF8toUTF32( const UTF8* codepoint, U32 *unitsWalked)
       expectedByteCount = 1;
    }
    
-   if(unitsWalked != NULL)
+   if(unitsWalked != nullptr)
       *unitsWalked = expectedByteCount;
    
    // codepoints in the surrogate range are illegal, and should be replaced.
@@ -459,7 +460,7 @@ const UTF32  oneUTF16toUTF32(const UTF16* codepoint, U32 *unitsWalked)
          break;
    }
 
-   if(unitsWalked != NULL)
+   if(unitsWalked != nullptr)
       *unitsWalked = unitCount;
 
    // codepoints in the surrogate range are illegal, and should be replaced.
@@ -629,9 +630,9 @@ bool chompUTF8BOM( const char *inString, char **outStringPtr )
    *outStringPtr = const_cast<char *>( inString );
 
    U8 bom[4];
-   dMemcpy( bom, inString, 4 );
+   memcpy( bom, inString, 4 );
 
-   bool valid = isValidUTF8BOM( bom );
+   bool valid = isValidUTF8BOM( bom, nullptr );
 
    // This is hackey, but I am not sure the best way to do it at the present.
    // The only valid BOM is a UTF8 BOM, which is 3 bytes, even though we read
@@ -645,7 +646,7 @@ bool chompUTF8BOM( const char *inString, char **outStringPtr )
    return valid;
 }
 
-bool isValidUTF8BOM( U8 bom[4] )
+bool isValidUTF8BOM( U8 bom[4], const char** outName )
 {
    // Is it a BOM?
    if( bom[0] == 0 )
@@ -653,7 +654,10 @@ bool isValidUTF8BOM( U8 bom[4] )
       // Could be UTF32BE
       if( bom[1] == 0 && bom[2] == 0xFE && bom[3] == 0xFF )
       {
-         // TOFIX Con::warnf( "Encountered a UTF32 BE BOM in this file; Torque does NOT support this file encoding. Use UTF8!" );
+         if (outName)
+         {
+            *outName = "UTF32";
+         }
          return false;
       }
 
@@ -664,27 +668,35 @@ bool isValidUTF8BOM( U8 bom[4] )
       // It's little endian, either UTF16 or UTF32
       if( bom[1] == 0xFE )
       {
-         /* TOFIX
-          if( bom[2] == 0 && bom[3] == 0 )
-            Con::warnf( "Encountered a UTF32 LE BOM in this file; Torque does NOT support this file encoding. Use UTF8!" );
-         else
-            Con::warnf( "Encountered a UTF16 LE BOM in this file; Torque does NOT support this file encoding. Use UTF8!" );
-          */
+         if (outName)
+         {
+            if( bom[2] == 0 && bom[3] == 0 )
+               *outName = "UTF32";
+            else
+               *outName = "UTF16";
+         }
       }
 
       return false;
    }
    else if( bom[0] == 0xFE && bom[1] == 0xFF )
    {
-      // TOFIX Con::warnf( "Encountered a UTF16 BE BOM in this file; Torque does NOT support this file encoding. Use UTF8!" );
+      if (outName)
+      {
+         *outName = "UTF16";
+      }
       return false;
    }
    else if( bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF )
    {
-      // Can enable this if you want -pw
-      //Con::printf("Encountered a UTF8 BOM. Torque supports this.");
+      if (outName)
+      {
+         *outName = "UTF8";
+      }
       return true;
    }
+   
+   *outName = nullptr;
 
    // Don't print out an error message here, because it will try this with
    // every script. -pw

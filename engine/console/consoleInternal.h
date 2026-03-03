@@ -1,4 +1,11 @@
 //-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
 // Copyright (c) 2012 GarageGames, LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -23,12 +30,6 @@
 #ifndef _CONSOLEINTERNAL_H_
 #define _CONSOLEINTERNAL_H_
 
-#ifndef _STRINGTABLE_H_
-#include "core/stringTable.h"
-#endif
-#ifndef _TVECTOR_H_
-#include "core/tVector.h"
-#endif
 #ifndef _DATACHUNKER_H_
 #include "core/dataChunker.h"
 #endif
@@ -48,79 +49,10 @@ class CodeBlock;
 class AbstractClassRep;
 class EnumTable;
 
-class IFFBlock
+namespace KorkApi
 {
-public:
-
-   U32 ident;
-protected:
-   U32 size;
-   
-public:
-   IFFBlock() : ident(0), size(0) {;}
-   
-   inline U32 getSize() const
-   {
-      return (U32)dAlignSize(size, 2);
-   }
-   
-   inline U32 getRawSize() const { return size; }
-   
-   void setSize(U32 val) { size = val; }
-   
-   inline void seekToEnd(U32 startPos, Stream &stream)
-   {
-      stream.setPosition(startPos + getSize() + 8);
-   }
-
-   inline bool writePad(Stream& stream)
-   {
-      U32 alignSize = (U32)dAlignSize(size, 2);
-      if (alignSize != size)
-      {
-         return stream.write((U8)0);
-      }
-      return true;
-   }
-
-   inline bool readPad(Stream& stream)
-   {
-      U32 alignSize = (U32)dAlignSize(size, 2);
-      if (alignSize != size)
-      {
-         U8 padByte = 0;
-         return stream.read(&padByte);
-      }
-      return true;
-   }
-   
-   bool updateSize(Stream& stream, U32 offset)
-   {
-      U32 newPos = stream.getPosition();
-      S64 newSize = (S64)newPos - (S64)offset - 8;
-      if (newSize < 0)
-      {
-         return false; // ???
-      }
-      
-      stream.setPosition(offset + 4);
-      size = (U32)newSize;
-      stream.write(size);
-      stream.setPosition(newPos);
-      return true;
-   }
-   
-   U32 getNextBlockPosition(U32 bytesInBlock)
-   {
-      return (U32)dAlignSize(size, 2) - bytesInBlock;
-   }
-
-   inline bool seekNext(Stream& stream, U32 bytesInBlock)
-   {
-      U32 eobBytes = (U32)dAlignSize(size, 2) - bytesInBlock;
-      return stream.setPosition(stream.getPosition() + eobBytes);
-   }
-};
+   struct TypeStorageInterface;
+}
 
 //-----------------------------------------------------------------------------
 
@@ -179,11 +111,18 @@ public:
       
       /// Whether this is a constant that cannot be assigned to.
       bool mIsConstant;
+      
+      // Whether this is a registered variable or not
+      bool mIsRegistered;
+      
+      U16 mEnforcedType;
 
    public:
       
       Entry(StringTableEntry name);
       ~Entry();
+      
+      inline KorkApi::ConsoleValue* getCVPtr() { return &mConsoleValue; }
    };
    
    struct HashTableData
@@ -198,7 +137,7 @@ public:
    KorkApi::VmInternal* mVm;
    
    Dictionary();
-   Dictionary(KorkApi::VmInternal *state, Dictionary::HashTableData* ref=NULL);
+   Dictionary(KorkApi::VmInternal *state, Dictionary::HashTableData* ref=nullptr);
    ~Dictionary();
    
    void clearEntry(Entry* e);
@@ -207,27 +146,33 @@ public:
    F32 getEntryNumberValue(Entry* e);
    const char *getEntryStringValue(Entry* e);
    KorkApi::ConsoleValue getEntryValue(Entry* e);
+   U16 getEntryType(Entry* e);
 
    void setEntryUnsignedValue(Entry* e, U64 val);
    void setEntryNumberValue(Entry* e, F32 val);
    void setEntryStringValue(Entry* e, const char *value);
-   void setEntryTypeValue(Entry* e, U32 typeId, void * value);
+   void setEntryTypeValue(Entry* e, U32 typeId, KorkApi::TypeStorageInterface * storage);
    void setEntryValue(Entry* e, KorkApi::ConsoleValue value);
+   void setEntryValues(Entry* e, U32 argc, KorkApi::ConsoleValue* values);
+   void setEntryType(Entry* e, U16 typeId);
    
    Entry *lookup(StringTableEntry name);
    Entry* getVariable(StringTableEntry name);
    Entry *add(StringTableEntry name);
-   void setState(KorkApi::VmInternal *state, Dictionary::HashTableData* ref=NULL);
+   void setState(KorkApi::VmInternal *state, Dictionary::HashTableData* ref=nullptr);
    void remove(Entry *);
    void reset();
    
-   void exportVariables( const char *varString, const char *fileName, bool append );
+   void exportVariables( const char *varString, void* userPtr, KorkApi::EnumFuncCallback outFunc );
    void deleteVariables( const char *varString );
    
    void setVariable(StringTableEntry name, const char *value);
    void setVariableValue(StringTableEntry name, KorkApi::ConsoleValue value);
    
    void remapVariables(U32 oldFiberIndex, U32 newFiberIndex);
+   
+   void resizeHeap(Entry* e, U32 newSize, bool force);
+   void getHeapPtrSize(Entry* e, U32* size, void** ptr);
    
    U32 getCount() const
    {
@@ -243,7 +188,7 @@ public:
    Entry* addVariable(    const char *name,
                       S32 type,
                       void *dataPtr,
-                      const char* usage = NULL );
+                      const char* usage = nullptr );
    
    /// @see Con::removeVariable
    bool removeVariable(StringTableEntry name);
@@ -336,7 +281,7 @@ public:
 
    /// The stack of callframes.  The extra redirection is necessary since Dictionary holds
    /// an interior pointer that will become invalid when the object changes address.
-   Vector< ConsoleFrame* > vmFrames;
+   KorkApi::Vector< ConsoleFrame* > vmFrames;
    
    KorkApi::FiberRunResult::State mState;
    KorkApi::ConsoleValue mLastFiberValue; ///< Value yielded from function or returned to fiber
@@ -444,10 +389,10 @@ struct ConsoleSerializer
    KorkApi::VmInternal* mTarget;
    Stream* mStream;
    void* mUserPtr;
-   Vector<CodeBlock*> mCodeBlocks;
-   Vector<Dictionary::HashTableData*> mDictionaryTables;
-   Vector<ExprEvalState*> mFibers;
-   Vector<Remap> mFiberRemap;
+   KorkApi::Vector<CodeBlock*> mCodeBlocks;
+   KorkApi::Vector<Dictionary::HashTableData*> mDictionaryTables;
+   KorkApi::Vector<ExprEvalState*> mFibers;
+   KorkApi::Vector<Remap> mFiberRemap;
    bool mAllowId;
 
    ConsoleSerializer(KorkApi::VmInternal* target, void* userPtr, bool allowId, Stream* s);
@@ -494,6 +439,8 @@ struct ConsoleSerializer
    bool loadFibers();
    bool saveFibers();
    
+   const char *readSTString(Stream* s, bool casesens=false);
+   
    void fixupConsoleValues();
 
    void reset(bool ownObjects);
@@ -503,8 +450,19 @@ struct ConsoleSerializer
    Dictionary::HashTableData* loadHashTable();
    bool writeHashTable(const Dictionary::HashTableData* ht);
    
-   bool read(Vector<ExprEvalState*> &fibers);
-   bool write(Vector<ExprEvalState*> &fibers);
+   bool read(KorkApi::Vector<ExprEvalState*> &fibers);
+   bool write(KorkApi::Vector<ExprEvalState*> &fibers);
+};
+
+struct ConsoleVarRef
+{
+   Dictionary* dictionary;
+   Dictionary::Entry *var;
+   
+   ConsoleVarRef() : dictionary(nullptr), var(nullptr)
+   {
+      
+   }
 };
 
 #endif

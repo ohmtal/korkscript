@@ -1,4 +1,11 @@
 //-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
 // Copyright (c) 2012 GarageGames, LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -32,6 +39,7 @@ class CodeStream;
 namespace Compiler
 {
 struct Resources;
+struct VarTypeTableEntry;
 }
 
 /// Enable this #define if you are seeing the message "precompile size mismatch" in the console.
@@ -39,14 +47,22 @@ struct Resources;
 /// due to incorrect compiler optimization.
 //#define DEBUG_AST_NODES
 
+// NOTE: this controls where the value in the AST node SHOULD be
 enum TypeReq
 {
-   TypeReqNone,
-   TypeReqUInt,
-   TypeReqFloat,
-   TypeReqString,
-   TypeReqVar
+   TypeReqNone,     // load = unset; save = unset
+   TypeReqUInt,     // load = to uint stack; save = to uint stack
+   TypeReqFloat,    // load = to float stack; save = from float stack
+   TypeReqString,   // load = to stringstack; save = from stringstack
+   TypeReqTypedString, // load = to stringstack; save = to stringstack (both typed)
+
+   // The following are used in special cases such as assignment
+   TypeReqVar,      // load = set copyvar; save = from copyvar
+   TypeReqField,    // load = from field; save = to field
+   TypeReqTuple     // not used in bytecode; acts as function call params, special case.
 };
+
+struct BaseAssignExprNode;
 
 /// Representation of a node for the scripting language parser.
 ///
@@ -93,6 +109,16 @@ struct StmtNode
    virtual U32 compileStmt(CodeStream &codeStream, U32 ip) = 0;
    virtual void setPackage(StringTableEntry packageName);
    /// @}
+
+   virtual StmtNode* rhsAssign() { return nullptr; }
+   virtual BaseAssignExprNode* asAssign() { return nullptr; }
+
+   inline BaseAssignExprNode* nextAssign() { StmtNode* rh = rhsAssign(); return rh ? rh->asAssign() : nullptr; }
+   
+   // Answers "does the result of this node load a field or var we can copy out?"
+   virtual TypeReq getReturnLoadType() { return TypeReqNone; }
+
+   void emitStackConversion(CodeStream& codeStream, TypeReq inputType, TypeReq outputType);
 };
 
 /// Helper macro
@@ -127,6 +153,7 @@ struct ExprNode : StmtNode
 
    virtual U32 compile(CodeStream &codeStream, U32 ip, TypeReq type) = 0;
    virtual TypeReq getPreferredType() = 0;
+   virtual bool canBeTyped() { return getPreferredType() == TypeReqTypedString; }
 };
 
 struct ReturnStmtNode : StmtNode
@@ -211,6 +238,9 @@ struct FloatBinaryExprNode : BinaryExprNode
   
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   TypeReq getReturnLoadType();
+   bool canBeTyped();
+   
    DBG_STMT_TYPE(FloatBinaryExprNode);
 };
 
@@ -238,6 +268,9 @@ struct IntBinaryExprNode : BinaryExprNode
    
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   bool canBeTyped();
+   TypeReq getReturnLoadType();
+   
    DBG_STMT_TYPE(IntBinaryExprNode);
 };
 
@@ -281,6 +314,8 @@ struct IntUnaryExprNode : ExprNode
   
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   TypeReq getReturnLoadType();
+   
    DBG_STMT_TYPE(IntUnaryExprNode);
 };
 
@@ -293,18 +328,29 @@ struct FloatUnaryExprNode : ExprNode
   
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   TypeReq getReturnLoadType();
+   
    DBG_STMT_TYPE(FloatUnaryExprNode);
 };
 
 struct VarNode : ExprNode
 {
    StringTableEntry varName;
+   StringTableEntry varType;
+   Compiler::VarTypeTableEntry* varInfo;
    ExprNode *arrayIndex;
+   bool disableTypes;
 
-   static VarNode *alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry varName, ExprNode *arrayIndex );
+   static VarNode *alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry varName, ExprNode *arrayIndex, StringTableEntry assignTypeName = nullptr );
   
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   bool isTyped();
+   bool canBeTyped();
+
+   TypeReq getReturnLoadType();
+
+
    DBG_STMT_TYPE(VarNode);
 };
 
@@ -360,17 +406,38 @@ struct ConstantNode : ExprNode
    DBG_STMT_TYPE(ConstantNode);
 };
 
-struct AssignExprNode : ExprNode
+struct BaseAssignExprNode : public ExprNode
+{
+   ExprNode *rhsExpr; // value we are assigning to left
+
+   BaseAssignExprNode* asAssign() override { return this; }
+   StmtNode* rhsAssign() override { return rhsExpr; }
+   
+   virtual void setAssignType(StringTableEntry typeName) {;}
+
+   BaseAssignExprNode* findDeepestAssign();
+
+   U32 emitCodeForTupleAssign();
+};
+
+struct AssignExprNode : BaseAssignExprNode
 {
    StringTableEntry varName;
-   ExprNode *expr;
+   StringTableEntry assignTypeName;
+   Compiler::VarTypeTableEntry* varInfo;
+
    ExprNode *arrayIndex;
    TypeReq subType;
+   
+   bool disableTypes;
 
-   static AssignExprNode *alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry varName, ExprNode *arrayIndex, ExprNode *expr );
+   static AssignExprNode *alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry varName, ExprNode *arrayIndex, ExprNode *expr, StringTableEntry assignTypeName = nullptr);
   
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   TypeReq getReturnLoadType();
+   virtual void setAssignType(StringTableEntry typeName);
+   
    DBG_STMT_TYPE(AssignExprNode);
 };
 
@@ -382,11 +449,11 @@ struct AssignDecl
    bool integer;
 };
 
-struct AssignOpExprNode : ExprNode
+struct AssignOpExprNode : BaseAssignExprNode
 {
    StringTableEntry varName;
-   ExprNode *expr;
    ExprNode *arrayIndex;
+   Compiler::VarTypeTableEntry* varInfo;
    SimpleLexer::TokenType op;
    U32 operand;
    TypeReq subType;
@@ -395,6 +462,7 @@ struct AssignOpExprNode : ExprNode
   
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   TypeReq getReturnLoadType();
    DBG_STMT_TYPE(AssignOpExprNode);
 };
 
@@ -443,11 +511,13 @@ struct FuncCallExprNode : ExprNode
       MethodCall,
       ParentCall
    };
+   bool disableTypes;
 
    static FuncCallExprNode *alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry funcName, StringTableEntry nameSpace, ExprNode *args, bool dot );
   
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   bool canBeTyped();
    DBG_STMT_TYPE(FuncCallExprNode);
 };
 
@@ -476,11 +546,14 @@ struct SlotAccessNode : ExprNode
 {
    ExprNode *objectExpr, *arrayExpr;
    StringTableEntry slotName;
+   bool disableTypes;
 
    static SlotAccessNode *alloc( Compiler::Resources* res, S32 lineNumber, ExprNode *objectExpr, ExprNode *arrayExpr, StringTableEntry slotName );
   
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   TypeReq getReturnLoadType();
+   bool canBeTyped();
    DBG_STMT_TYPE(SlotAccessNode);
 };
 
@@ -504,26 +577,26 @@ struct InternalSlotAccessNode : ExprNode
    DBG_STMT_TYPE(InternalSlotAccessNode);
 };
 
-struct SlotAssignNode : ExprNode
+struct SlotAssignNode : BaseAssignExprNode
 {
    ExprNode *objectExpr, *arrayExpr;
    StringTableEntry slotName;
-   ExprNode *valueExpr;
-   U32 typeID;
+   StringTableEntry varType;
+   bool disableTypes;
 
-   static SlotAssignNode *alloc( Compiler::Resources* res, S32 lineNumber, ExprNode *objectExpr, ExprNode *arrayExpr, StringTableEntry slotName, ExprNode *valueExpr, U32 typeID = -1 );
+   static SlotAssignNode *alloc( Compiler::Resources* res, S32 lineNumber, ExprNode *objectExpr, ExprNode *arrayExpr, StringTableEntry slotName, ExprNode *valueExpr, StringTableEntry assignTypeName = nullptr );
   
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   TypeReq getReturnLoadType();
    DBG_STMT_TYPE(SlotAssignNode);
 };
 
-struct SlotAssignOpNode : ExprNode
+struct SlotAssignOpNode : BaseAssignExprNode
 {
    ExprNode *objectExpr, *arrayExpr;
    StringTableEntry slotName;
    SimpleLexer::TokenType op;
-   ExprNode *valueExpr;
    U32 operand;
    TypeReq subType;
 
@@ -531,6 +604,7 @@ struct SlotAssignOpNode : ExprNode
   
    U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
    TypeReq getPreferredType();
+   TypeReq getReturnLoadType();
    DBG_STMT_TYPE(SlotAssignOpNode);
 };
 
@@ -569,10 +643,11 @@ struct FunctionDeclStmtNode : StmtNode
    StmtNode *stmts;
    StringTableEntry nameSpace;
    StringTableEntry package;
+   StringTableEntry returnTypeName;
    U32 endOffset;
    U32 argc;
 
-   static FunctionDeclStmtNode *alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry fnName, StringTableEntry nameSpace, VarNode *args, StmtNode *stmts );
+   static FunctionDeclStmtNode *alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry fnName, StringTableEntry nameSpace, VarNode *args, StmtNode *stmts, StringTableEntry returnType = nullptr );
    
    U32 compileStmt(CodeStream &codeStream, U32 ip);
    void setPackage(StringTableEntry packageName);
@@ -606,5 +681,16 @@ struct CatchStmtNode : StmtNode
    DBG_STMT_TYPE(CatchStmtNode);
 };
 
+// Untyped tuple expr; here to simplify compilation logic
+struct TupleExprNode : ExprNode
+{
+   ExprNode* items;
+
+   static TupleExprNode *alloc( Compiler::Resources* res, S32 lineNumber, ExprNode* items );
+   
+   virtual U32 compile(CodeStream &codeStream, U32 ip, TypeReq type);
+   virtual TypeReq getPreferredType();
+   virtual bool canBeTyped();
+};
 
 #endif

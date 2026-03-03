@@ -1,4 +1,10 @@
 #pragma once
+//-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
 
 namespace KorkApi
 {
@@ -21,6 +27,7 @@ struct ConsoleValue
       TypeBeginCustom    = 3    // void*
    };
    
+   // NOTE: zone only applies to String and Custom types
    enum Zone : U16
    {
       ZoneExternal = 0, // externally managed pointer
@@ -126,6 +133,14 @@ struct ConsoleValue
       U64 val = cvalue;
       return *((F64*)&val);
    }
+   
+   F64 quickCastToNumeric(F64 def = 0.0) const
+   {
+      if (typeId == TypeInternalNumber)
+         return getFloat(def);
+      else
+         return getInt(def);
+   }
 
    void* ptr() const
    {
@@ -143,7 +158,28 @@ struct ConsoleValue
    {
       if (!(typeId == TypeInternalString || typeId >= TypeBeginCustom))
       {
-         return NULL;
+         return nullptr;
+      }
+      
+      switch (getZone())
+      {
+         case ZoneExternal:
+         case ZoneVmHeap:
+            return (void*)(cvalue);
+         case ZonePacked:
+            return (void*)&cvalue;
+         case ZoneReturn:
+            return addOffset(base.arg, cvalue);
+         default:
+            return addOffset(base.func[zoneId - ZoneFiberStart], cvalue);
+      }
+   }
+   
+   void* evaluateFixedPtr(AllocBase base = {}) const
+   {
+      if (!(typeId == TypeInternalString || typeId >= TypeBeginCustom))
+      {
+         return (void*)&cvalue;
       }
       
       switch (getZone())
@@ -162,14 +198,14 @@ struct ConsoleValue
    
    static inline void* addOffset(const void* base, U64 off)
    {
-      return (!base) ? NULL : reinterpret_cast<void*>(reinterpret_cast<UINTPTR>(base) + static_cast<UINTPTR>(off));
+      return (!base) ? nullptr : reinterpret_cast<void*>(reinterpret_cast<UINTPTR>(base) + static_cast<UINTPTR>(off));
    }
    
    inline bool isString() const
    {
       return typeId == TypeInternalString;
    }
-   inline bool isInt()    const
+   inline bool isUnsigned()    const
    {
       return typeId == TypeInternalUnsigned;
    }
@@ -184,6 +220,49 @@ struct ConsoleValue
    inline bool isNull()
    {
       return typeId == TypeInternalString && cvalue == 0;
+   }
+
+   inline bool hasRelocatableStorage() const
+   {
+      switch (getZone())
+      {
+         case ZoneExternal:
+         case ZonePacked:
+            return false;
+         case ZoneVmHeap:
+         case ZoneReturn:
+         default:
+            return true;
+      }
+   }
+
+   inline bool canBePacked() const
+   {
+      return typeId == TypeInternalUnsigned || 
+             typeId == TypeInternalNumber;
+   }
+
+   template<class T> static void convertArgs(ConsoleValue::AllocBase allocBase, U32 numArgs, KorkApi::ConsoleValue* args, const char **outArgs, T&& convertDelegate)
+   {
+      for(U32 i = 0; i < numArgs; i++)
+      {
+         if (!args[i].isString())
+         {
+            outArgs[i] = (const char*)args[i].evaluatePtr(allocBase);
+         }
+         else
+         {
+            outArgs[i] = convertDelegate(args[i]); // i.e. vm->valueAsString(args[i]);
+         }
+      }
+   }
+
+   static void convertArgsReverse(U32 numArgs, const char **args, KorkApi::ConsoleValue* outArgs)
+   {
+      for(U32 i = 0; i < numArgs; i++)
+      {
+         outArgs[i] = KorkApi::ConsoleValue::makeString(args[i]);
+      }
    }
 };
 #pragma pack(pop)

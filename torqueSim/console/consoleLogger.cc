@@ -22,7 +22,7 @@
 #include "console/consoleLogger.h"
 #include "console/consoleTypes.h"
 
-Vector<ConsoleLogger *> ConsoleLogger::mActiveLoggers;
+std::vector<ConsoleLogger *> ConsoleLogger::mActiveLoggers;
 bool ConsoleLogger::smInitialized = false;
 
 IMPLEMENT_CONOBJECT( ConsoleLogger );
@@ -31,7 +31,7 @@ IMPLEMENT_CONOBJECT( ConsoleLogger );
 
 ConsoleLogger::ConsoleLogger()
 {
-   mFilename = NULL;
+   mFilename = nullptr;
    mLogging = false;
    mAppend = false;
 
@@ -119,7 +119,7 @@ bool ConsoleLogger::init()
 
 bool ConsoleLogger::attach()
 {
-   if( mFilename == NULL )
+   if( mFilename == nullptr )
    {
       Con::errorf( "ConsoleLogger failed to attach: no filename supplied." );
       return false;
@@ -173,7 +173,7 @@ bool ConsoleLogger::detach()
    {
       if( mActiveLoggers[i] == this ) 
       {
-         mActiveLoggers.erase( i );
+         mActiveLoggers.erase( mActiveLoggers.begin() + i );
          mLogging = false;
          return true;
       }

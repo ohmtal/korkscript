@@ -1,4 +1,10 @@
 #pragma once
+//-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
 
 /*
 
@@ -156,8 +162,8 @@ public:
 	{
 		mMemSize = 128 * 1024;
 		mScratchSize = 256;
-		mModuleFile = NULL;
-		mClassName = NULL;
+		mModuleFile = nullptr;
+		mClassName = nullptr;
 		memset(mFuncNames, '\0', sizeof(mFuncNames));
 		memset(mFuncSignatures, '\0', sizeof(mFuncSignatures));
 		memset(mHostFuncs, '\0', sizeof(mHostFuncs));
@@ -173,7 +179,7 @@ public:
 
 	virtual void initScratch() = 0;
 	virtual bool initRuntime() = 0;
-	virtual void cleanup() = 0;
+	virtual void cleanup() {;}
 	virtual bool load(Stream& s) = 0;
 	virtual bool linkFuncs() = 0;
 

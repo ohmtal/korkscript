@@ -1,4 +1,11 @@
 //-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
 // Copyright (c) 2013 GarageGames, LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -25,6 +32,7 @@
 #include "embed/internalApi.h"
 #include "console/compiler.h"
 #include "console/consoleInternal.h"
+#include "console/ast.h"
 
 using namespace Compiler;
 
@@ -198,13 +206,16 @@ FloatUnaryExprNode *FloatUnaryExprNode::alloc( Compiler::Resources* res, S32 lin
    return ret;
 }
 
-VarNode *VarNode::alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry varName, ExprNode *arrayIndex )
+VarNode *VarNode::alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry varName, ExprNode *arrayIndex, StringTableEntry typeName )
 {
    VarNode *ret = (VarNode *) res->consoleAlloc(sizeof(VarNode));
    constructInPlace(ret);
    ret->dbgLineNumber = lineNumber;
    ret->varName = varName;
    ret->arrayIndex = arrayIndex;
+   ret->varType = res->allowTypes ? typeName : nullptr;
+   ret->varInfo = res->getVarInfo(varName, ret->varType);
+   ret->disableTypes = !res->allowTypes;
    return ret;
 }
 
@@ -244,7 +255,7 @@ StrConstNode *StrConstNode::alloc( Compiler::Resources* res, S32 lineNumber, cha
    StrConstNode *ret = (StrConstNode *) res->consoleAlloc(sizeof(StrConstNode));
    constructInPlace(ret);
    ret->dbgLineNumber = lineNumber;
-   ret->str = (char *) res->consoleAlloc((U32)dAlignSize(forceLen >= 0 ? forceLen+1 : dStrlen(str) + 1, 8));
+   ret->str = (char *) res->consoleAlloc((U32)dAlignSize(forceLen >= 0 ? forceLen+1 : strlen(str) + 1, 8));
    ret->tag = tag;
    ret->doc = doc;
    
@@ -255,7 +266,7 @@ StrConstNode *StrConstNode::alloc( Compiler::Resources* res, S32 lineNumber, cha
    }
    else
    {
-      dStrcpy(ret->str, str);
+      strcpy(ret->str, str);
    }
    
    return ret;
@@ -270,15 +281,19 @@ ConstantNode *ConstantNode::alloc( Compiler::Resources* res, S32 lineNumber, Str
    return ret;
 }
 
-AssignExprNode *AssignExprNode::alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry varName, ExprNode *arrayIndex, ExprNode *expr )
+AssignExprNode *AssignExprNode::alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry varName, ExprNode *arrayIndex, ExprNode *expr, StringTableEntry typeName )
 {
    AssignExprNode *ret = (AssignExprNode *) res->consoleAlloc(sizeof(AssignExprNode));
    constructInPlace(ret);
+
    ret->dbgLineNumber = lineNumber;
    ret->varName = varName;
-   ret->expr = expr;
+   ret->rhsExpr = expr;
    ret->arrayIndex = arrayIndex;
    ret->subType = TypeReqNone;
+   ret->assignTypeName = typeName;
+   ret->varInfo = res->getVarInfo(varName, ret->assignTypeName);
+   ret->disableTypes = !res->allowTypes;
    
    return ret;
 }
@@ -287,13 +302,16 @@ AssignOpExprNode *AssignOpExprNode::alloc( Compiler::Resources* res, S32 lineNum
 {
    AssignOpExprNode *ret = (AssignOpExprNode *) res->consoleAlloc(sizeof(AssignOpExprNode));
    constructInPlace(ret);
+
    ret->dbgLineNumber = lineNumber;
    ret->varName = varName;
-   ret->expr = expr;
+   ret->rhsExpr = expr;
    ret->arrayIndex = arrayIndex;
    ret->subType = TypeReqNone;
    ret->op = op;
    ret->operand = 0;
+   ret->varInfo = res->getVarInfo(varName);
+
    return ret;
 }
 
@@ -334,11 +352,12 @@ FuncCallExprNode *FuncCallExprNode::alloc( Compiler::Resources* res, S32 lineNum
    ret->funcName = funcName;
    ret->nameSpace = nameSpace;
    ret->args = args;
+   ret->disableTypes = !res->allowTypes;
    if(dot)
       ret->callType = MethodCall;
    else
    {
-      if(nameSpace && !dStricmp(nameSpace, "Parent"))
+      if(nameSpace && !strcasecmp(nameSpace, "Parent"))
          ret->callType = ParentCall;
       else
          ret->callType = FunctionCall;
@@ -359,7 +378,7 @@ AssertCallExprNode *AssertCallExprNode::alloc( Compiler::Resources* res, S32 lin
    
 #else
    
-   return NULL;
+   return nullptr;
    
 #endif
 }
@@ -372,6 +391,7 @@ SlotAccessNode *SlotAccessNode::alloc( Compiler::Resources* res, S32 lineNumber,
    ret->objectExpr = objectExpr;
    ret->arrayExpr = arrayExpr;
    ret->slotName = slotName;
+   ret->disableTypes = !res->allowTypes;
    return ret;
 }
 
@@ -386,7 +406,7 @@ InternalSlotAccessNode *InternalSlotAccessNode::alloc( Compiler::Resources* res,
    return ret;
 }
 
-SlotAssignNode *SlotAssignNode::alloc( Compiler::Resources* res, S32 lineNumber, ExprNode *objectExpr, ExprNode *arrayExpr, StringTableEntry slotName, ExprNode *valueExpr, U32 typeID /* = -1 */ )
+SlotAssignNode *SlotAssignNode::alloc( Compiler::Resources* res, S32 lineNumber, ExprNode *objectExpr, ExprNode *arrayExpr, StringTableEntry slotName, ExprNode *valueExpr, StringTableEntry typeName )
 {
    SlotAssignNode *ret = (SlotAssignNode *) res->consoleAlloc(sizeof(SlotAssignNode));
    constructInPlace(ret);
@@ -394,8 +414,9 @@ SlotAssignNode *SlotAssignNode::alloc( Compiler::Resources* res, S32 lineNumber,
    ret->objectExpr = objectExpr;
    ret->arrayExpr = arrayExpr;
    ret->slotName = slotName;
-   ret->valueExpr = valueExpr;
-   ret->typeID = typeID;
+   ret->rhsExpr = valueExpr;
+   ret->varType = res->allowTypes ? typeName : nullptr;
+   ret->disableTypes = !res->allowTypes;
    return ret;
 }
 
@@ -409,7 +430,7 @@ SlotAssignOpNode *SlotAssignOpNode::alloc( Compiler::Resources* res, S32 lineNum
    ret->slotName = slotName;
    ret->op = op;
    ret->operand = 0;
-   ret->valueExpr = valueExpr;
+   ret->rhsExpr = valueExpr;
    ret->subType = TypeReqNone;
    return ret;
 }
@@ -431,11 +452,11 @@ ObjectDeclNode *ObjectDeclNode::alloc( Compiler::Resources* res, S32 lineNumber,
    if(parentObject)
       ret->parentObject = parentObject;
    else
-      ret->parentObject = StringTable->insert("");
+      ret->parentObject = res->emptyString;
    return ret;
 }
 
-FunctionDeclStmtNode *FunctionDeclStmtNode::alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry fnName, StringTableEntry nameSpace, VarNode *args, StmtNode *stmts )
+FunctionDeclStmtNode *FunctionDeclStmtNode::alloc( Compiler::Resources* res, S32 lineNumber, StringTableEntry fnName, StringTableEntry nameSpace, VarNode *args, StmtNode *stmts, StringTableEntry retTypeName )
 {
    FunctionDeclStmtNode *ret = (FunctionDeclStmtNode *) res->consoleAlloc(sizeof(FunctionDeclStmtNode));
    constructInPlace(ret);
@@ -444,8 +465,9 @@ FunctionDeclStmtNode *FunctionDeclStmtNode::alloc( Compiler::Resources* res, S32
    ret->args = args;
    ret->stmts = stmts;
    ret->nameSpace = nameSpace;
-   ret->package = NULL;
+   ret->package = nullptr;
    ret->argc = 0;
+   ret->returnTypeName = retTypeName;
    return ret;
 }
 
@@ -476,6 +498,15 @@ TryStmtNode* TryStmtNode::alloc(Compiler::Resources* res,
    ret->startEndJmpOffset   = 0;
    ret->endTryFixOffset   = 0;
    ret->endTryCatchOffset   = 0;
+   return ret;
+}
+
+TupleExprNode *TupleExprNode::alloc( Compiler::Resources* res, S32 lineNumber, ExprNode* inItems )
+{
+   TupleExprNode* ret = (TupleExprNode *) res->consoleAlloc(sizeof(TupleExprNode));
+   constructInPlace(ret);
+   ret->dbgLineNumber = lineNumber;
+   ret->items         = inItems;
    return ret;
 }
 

@@ -1,15 +1,46 @@
+//-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
+// Copyright (c) 2013 GarageGames, LLC
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to
+// deal in the Software without restriction, including without limitation the
+// rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+// sell copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+// FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+// IN THE SOFTWARE.
+//-----------------------------------------------------------------------------
+
 #include "embed/api.h"
 #include "embed/internalApi.h"
 #include "console/consoleNamespace.h"
 #include "console/consoleInternal.h"
+#include "console/compiler.h"
+#include "console/codeBlock.h"
 
 extern U32 HashPointer(StringTableEntry ptr);
 
 NamespaceState::NamespaceState()
 {
    mCacheSequence = 0;
-   mNamespaceList = NULL;
-   mGlobalNamespace = NULL;
+   mNamespaceList = nullptr;
+   mGlobalNamespace = nullptr;
 }
 
 void NamespaceState::init(KorkApi::VmInternal* vmInternal)
@@ -17,7 +48,7 @@ void NamespaceState::init(KorkApi::VmInternal* vmInternal)
    mNumActivePackages = 0;
    mOldNumActivePackages = 0;
    mVmInternal = vmInternal;
-   mGlobalNamespace = find(NULL);
+   mGlobalNamespace = find(nullptr);
 }
 
 Namespace *NamespaceState::global()
@@ -35,34 +66,34 @@ bool NamespaceState::canTabComplete(const char *prevText, const char *bestMatch,
                                const char *newText, S32 baseLen, bool fForward)
 {
    // test if it matches the first baseLen chars:
-   if(dStrnicmp(newText, prevText, baseLen))
+   if(strncasecmp(newText, prevText, baseLen))
       return false;
    
    if (fForward)
    {
       if(!bestMatch)
-         return dStricmp(newText, prevText) > 0;
+         return strcasecmp(newText, prevText) > 0;
       else
-         return (dStricmp(newText, prevText) > 0) &&
-         (dStricmp(newText, bestMatch) < 0);
+         return (strcasecmp(newText, prevText) > 0) &&
+         (strcasecmp(newText, bestMatch) < 0);
    }
    else
    {
-      if (dStrlen(prevText) == (U32) baseLen)
+      if (strlen(prevText) == (U32) baseLen)
       {
          // look for the 'worst match'
          if(!bestMatch)
-            return dStricmp(newText, prevText) > 0;
+            return strcasecmp(newText, prevText) > 0;
          else
-            return dStricmp(newText, bestMatch) > 0;
+            return strcasecmp(newText, bestMatch) > 0;
       }
       else
       {
          if (!bestMatch)
-            return (dStricmp(newText, prevText)  < 0);
+            return (strcasecmp(newText, prevText)  < 0);
          else
-            return (dStricmp(newText, prevText)  < 0) &&
-            (dStricmp(newText, bestMatch) > 0);
+            return (strcasecmp(newText, prevText)  < 0) &&
+            (strcasecmp(newText, bestMatch) > 0);
       }
    }
 }
@@ -140,7 +171,7 @@ void NamespaceState::deactivatePackage(StringTableEntry name)
             Namespace *parent = find(walk->mName);
             // hook the parent
             parent->mParent = walk->mParent;
-            walk->mParent = NULL;
+            walk->mParent = nullptr;
 
             // now swap the entries:
             Namespace::Entry *ew;
@@ -165,6 +196,11 @@ void NamespaceState::unlinkPackages()
    if(!mNumActivePackages)
       return;
    deactivatePackage(mActivePackages[0]);
+   
+   for (CodeBlock* block = mVmInternal->mCodeBlockList; block; block = block->nextFile)
+   {
+      block->flushNSEntries();
+   }
 }
 
 void NamespaceState::relinkPackages()
@@ -183,8 +219,8 @@ void NamespaceState::trashCache()
 
 Namespace::Entry::Entry()
 {
-   mCode = NULL;
-   mUserPtr = NULL;
+   mCode = nullptr;
+   mUserPtr = nullptr;
    mType = InvalidFunctionType;
 }
 
@@ -193,24 +229,24 @@ void Namespace::Entry::clear()
    if(mCode)
    {
       mCode->decRefCount();
-      mCode = NULL;
+      mCode = nullptr;
    }
-   mUserPtr = NULL;
+   mUserPtr = nullptr;
 }
 
 Namespace::Namespace()
 {
-   mPackage = NULL;
-   mName = NULL;
-   mParent = NULL;
-   mNext = NULL;
-   mEntryList = NULL;
+   mPackage = nullptr;
+   mName = nullptr;
+   mParent = nullptr;
+   mNext = nullptr;
+   mEntryList = nullptr;
    mHashSize = 0;
    mHashTable = 0;
    mHashSequence = 0;
    mRefCountToParent = 0;
-   //mClassRep = 0;
-   mVmInternal = NULL;
+   mUserPtr = nullptr;
+   mVmInternal = nullptr;
 }
 
 void Namespace::initVM(KorkApi::VmInternal* vm)
@@ -240,6 +276,13 @@ Namespace *NamespaceState::find(StringTableEntry name, StringTableEntry package)
    return ret;
 }
 
+Namespace *NamespaceState::lookup(StringTableEntry name, StringTableEntry package)
+{
+   for(Namespace *walk = mNamespaceList; walk; walk = walk->mNext)
+      if(walk->mName == name && walk->mPackage == package)
+         return walk;
+}
+
 bool Namespace::unlinkClass(Namespace *parent)
 {
    Namespace *walk = this;
@@ -257,7 +300,7 @@ bool Namespace::unlinkClass(Namespace *parent)
    AssertFatal(mRefCountToParent >= 0, "Namespace::unlinkClass: reference count to parent is less than 0");
 
    if(mRefCountToParent == 0)
-      walk->mParent = NULL;
+      walk->mParent = nullptr;
 
    return true;
 }
@@ -308,7 +351,7 @@ void Namespace::buildHashTable()
 
    mHashTable = (Namespace::Entry **) mVmInternal->mNSState.mCacheAllocator.alloc(sizeof(Namespace::Entry *) * mHashSize);
    for(U32 i = 0; i < mHashSize; i++)
-      mHashTable[i] = NULL;
+      mHashTable[i] = nullptr;
 
    for(ns = this; ns; ns = ns->mParent)
    {
@@ -335,7 +378,7 @@ const char *Namespace::tabComplete(const char *prevText, S32 baseLen, bool fForw
    if(mHashSequence != mVmInternal->mNSState.mCacheSequence)
       buildHashTable();
 
-   const char *bestMatch = NULL;
+   const char *bestMatch = nullptr;
    for(U32 i = 0; i < mHashSize; i++)
       if(mHashTable[i] && mVmInternal->mNSState.canTabComplete(prevText, bestMatch, mHashTable[i]->mFunctionName, baseLen, fForward))
          bestMatch = mHashTable[i]->mFunctionName;
@@ -349,7 +392,7 @@ Namespace::Entry *Namespace::lookupRecursive(StringTableEntry name)
          if(walk->mFunctionName == name)
             return walk;
 
-   return NULL;
+   return nullptr;
 }
 
 Namespace::Entry *Namespace::lookup(StringTableEntry name)
@@ -358,7 +401,7 @@ Namespace::Entry *Namespace::lookup(StringTableEntry name)
       buildHashTable();
 
    if (mHashSize == 0)
-      return NULL;
+      return nullptr;
 
    U32 index = HashPointer(name) % mHashSize;
    while(mHashTable[index] && mHashTable[index]->mFunctionName != name)
@@ -372,10 +415,10 @@ Namespace::Entry *Namespace::lookup(StringTableEntry name)
 
 bool compareEntries(const Namespace::Entry* a, const Namespace::Entry* b)
 {
-    return dStricmp(a->mFunctionName, b->mFunctionName) < 0;
+    return strcasecmp(a->mFunctionName, b->mFunctionName) < 0;
 }
 
-void Namespace::getEntryList(Vector<Entry *> *vec)
+void Namespace::getEntryList(KorkApi::Vector<Entry *> *vec)
 {
    if(mHashSequence != mVmInternal->mNSState.mCacheSequence)
       buildHashTable();
@@ -414,7 +457,7 @@ void Namespace::addFunction(StringTableEntry name, CodeBlock *cb, U32 functionOf
    Entry *ent = createLocalEntry(name);
    mVmInternal->mNSState.trashCache();
 
-   ent->mUsage = NULL;
+   ent->mUsage = nullptr;
    ent->mCode = cb;
    ent->mFunctionOffset = functionOffset;
    ent->mCode->incRefCount();
@@ -505,37 +548,18 @@ void Namespace::addCommand(StringTableEntry name, KorkApi::ValueFuncCallback cb,
    ent->cb.mValueCallbackFunc = cb;
 }
 
-void Namespace::addOverload(const char * name, const char *altUsage)
-{
-   char buffer[1024];
-   char lilBuffer[32];
-   dStrcpy(buffer, name);
-   dSprintf(lilBuffer, 32, "_%d", mVmInternal->mNSCounter++);
-   dStrcat(buffer, lilBuffer);
-
-   Entry *ent = createLocalEntry(StringTable->insert( buffer ));
-   mVmInternal->mNSState.trashCache();
-
-   ent->mUsage = altUsage;
-   ent->mMinArgs = -1;
-   ent->mMaxArgs = -2;
-
-   ent->mType = Entry::OverloadMarker;
-   ent->cb.mGroupName = name;
-}
-
 void Namespace::markGroup(const char* name, const char* usage)
 {
    char buffer[1024];
    char lilBuffer[32];
-   dStrcpy(buffer, name);
-   dSprintf(lilBuffer, 32, "_%d", mVmInternal->mNSCounter++);
-   dStrcat(buffer, lilBuffer);
+   strcpy(buffer, name);
+   snprintf(lilBuffer, 32, "_%d", mVmInternal->mNSCounter++);
+   strcat(buffer, lilBuffer);
 
-   Entry *ent = createLocalEntry(StringTable->insert( buffer ));
+   Entry *ent = createLocalEntry(mVmInternal->internString(buffer, false));
    mVmInternal->mNSState.trashCache();
 
-   if(usage != NULL)
+   if(usage != nullptr)
       lastUsage = (char*)(ent->mUsage = usage);
    else
       ent->mUsage = lastUsage;
@@ -549,7 +573,7 @@ void Namespace::markGroup(const char* name, const char* usage)
 
 inline void* safeObjectUserPtr(KorkApi::VMObject* obj)
 {
-   return obj ? obj->userPtr : NULL;
+   return obj ? obj->userPtr : nullptr;
 }
 
 KorkApi::ConsoleValue Namespace::Entry::execute(S32 argc, KorkApi::ConsoleValue* argv, ExprEvalState *state, KorkApi::VMObject* resolvedThis, bool startSuspended)
@@ -557,15 +581,20 @@ KorkApi::ConsoleValue Namespace::Entry::execute(S32 argc, KorkApi::ConsoleValue*
    if(mType == ScriptFunctionType)
    {
       if(mFunctionOffset)
-         return mCode->exec(mFunctionOffset, StringTable->insert(mNamespace->mVmInternal->valueAsString(argv[0])), mNamespace, argc, argv, false, true, mPackage, -1, startSuspended);
+      {
+         const char* strV = mNamespace->mVmInternal->valueAsString(argv[0]);
+         return mCode->exec(mFunctionOffset, state->vmInternal->internString(strV, false), mNamespace, argc, argv, false, true, mPackage, -1, startSuspended);
+      }
       else
+      {
          return KorkApi::ConsoleValue();
+      }
    }
 
    if((mMinArgs && argc < mMinArgs) || (mMaxArgs && argc > mMaxArgs))
    {
       state->vmInternal->printf(0, "%s::%s - wrong number of arguments.", mNamespace->mName, mFunctionName);
-      state->vmInternal->printf(0, "usage: %s", mUsage);
+      state->vmInternal->printf(0, "usage: %s", getUsage());
       return KorkApi::ConsoleValue();
    }
 
@@ -573,7 +602,10 @@ KorkApi::ConsoleValue Namespace::Entry::execute(S32 argc, KorkApi::ConsoleValue*
 
    if (mType != ValueCallbackType)
    {
-      StringStack::convertArgs(mNamespace->mVmInternal, argc, argv, localArgv);
+      KorkApi::ConsoleValue::convertArgs(mNamespace->mVmInternal->mAllocBase, argc, argv, localArgv,
+                                         [this](KorkApi::ConsoleValue v){
+         return mNamespace->mVmInternal->valueAsString(v);
+      });
    }
 
    char* returnBuffer = state->vmInternal->mExecReturnBuffer;
@@ -585,18 +617,18 @@ KorkApi::ConsoleValue Namespace::Entry::execute(S32 argc, KorkApi::ConsoleValue*
       case StringCallbackType:
          return KorkApi::ConsoleValue::makeString(cb.mStringCallbackFunc(safeObjectUserPtr(resolvedThis), mUserPtr, argc, localArgv));
       case IntCallbackType:
-         dSprintf(returnBuffer, KorkApi::VmInternal::ExecReturnBufferSize, "%d",
+         snprintf(returnBuffer, KorkApi::VmInternal::ExecReturnBufferSize, "%d",
             cb.mIntCallbackFunc(safeObjectUserPtr(resolvedThis), mUserPtr, argc, localArgv));
          return KorkApi::ConsoleValue::makeString(returnBuffer);
       case FloatCallbackType:
-         dSprintf(returnBuffer, KorkApi::VmInternal::ExecReturnBufferSize, "%g",
+         snprintf(returnBuffer, KorkApi::VmInternal::ExecReturnBufferSize, "%g",
             cb.mFloatCallbackFunc(safeObjectUserPtr(resolvedThis), mUserPtr, argc, localArgv));
          return KorkApi::ConsoleValue::makeString(returnBuffer);
       case VoidCallbackType:
          cb.mVoidCallbackFunc(safeObjectUserPtr(resolvedThis), mUserPtr, argc, localArgv);
          break;
       case BoolCallbackType:
-         dSprintf(returnBuffer, KorkApi::VmInternal::ExecReturnBufferSize, "%d",
+         snprintf(returnBuffer, KorkApi::VmInternal::ExecReturnBufferSize, "%d",
             (U32)cb.mBoolCallbackFunc(safeObjectUserPtr(resolvedThis), mUserPtr, argc, localArgv));
          return KorkApi::ConsoleValue::makeString(returnBuffer);
       default:

@@ -22,7 +22,6 @@
 
 #include "platform/platform.h"
 #include "core/stream.h"
-#include "core/stringTable.h"
 
 
 Stream::Stream()
@@ -59,7 +58,7 @@ const char* Stream::getStatusString(const Status in_status)
 
 void Stream::writeString(const char *string, S32 maxLen)
 {
-   S32 len = string ? dStrlen(string) : 0;
+   S32 len = string ? strlen(string) : 0;
    if(len > maxLen)
       len = maxLen;
 
@@ -68,32 +67,12 @@ void Stream::writeString(const char *string, S32 maxLen)
       write(len, string);
 }
 
-bool Stream::writeFormattedBuffer(const char *format, ...)
-{
-   char buffer[4096];
-   va_list args;
-   va_start(args, format);
-   const S32 length = dVsprintf(buffer, 4096, format, args);
-
-   // Sanity!
-   AssertFatal(length <= sizeof(buffer), "writeFormattedBuffer - String format exceeded buffer size.  This will cause corruption.");
-
-   return write( length, buffer );
-}
-
 void Stream::readString(char buf[256])
 {
    U8 len;
    read(&len);
    read(S32(len), buf);
    buf[len] = 0;
-}
-
-const char *Stream::readSTString(bool casesens)
-{
-   char buf[256];
-   readString(buf);
-   return StringTable->insert(buf, casesens);
 }
 
 void Stream::readLongString(U32 maxStringLen, char *stringBuf)
@@ -111,7 +90,7 @@ void Stream::readLongString(U32 maxStringLen, char *stringBuf)
 
 void Stream::writeLongString(U32 maxStringLen, const char *string)
 {
-   U32 len = dStrlen(string);
+   U32 len = strlen(string);
    if(len > maxStringLen)
       len = maxStringLen;
    write(len);
@@ -120,7 +99,7 @@ void Stream::writeLongString(U32 maxStringLen, const char *string)
 
 void Stream::readLine(U8 *buffer, U32 bufferSize)
 {
-   bufferSize--;  // account for NULL terminator
+   bufferSize--;  // account for nullptr terminator
    U8 *buff = buffer;
    U8 *buffEnd = buff + bufferSize;
    *buff = '\r';
@@ -143,7 +122,7 @@ void Stream::readLine(U8 *buffer, U32 bufferSize)
 
 #if defined(TORQUE_OS_OSX)
       U32 pushPos = getPosition(); // in case we need to back up.
-      if (read(buff)) // feeling free to overwrite the \r as the NULL below will overwrite again...
+      if (read(buff)) // feeling free to overwrite the \r as the nullptr below will overwrite again...
           if (*buff != '\n') // then push our position back.
              setPosition(pushPos);
        break; // we're always done after seeing the CR...
@@ -158,7 +137,7 @@ void Stream::readLine(U8 *buffer, U32 bufferSize)
 
 void Stream::writeLine(U8 *buffer)
 {
-   write(dStrlen((const char*)buffer), buffer);
+   write(strlen((const char*)buffer), buffer);
    write(2, "\r\n");
 }
 

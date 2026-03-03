@@ -21,13 +21,14 @@
 //-----------------------------------------------------------------------------
 
 #include "sim/dynamicTypes.h"
+#include "embed/compilerOpcodes.h"
 
 // Init the globals.
-ConsoleBaseType *ConsoleBaseType::smListHead = NULL;
+ConsoleBaseType *ConsoleBaseType::smListHead = nullptr;
 S32              ConsoleBaseType::smConsoleTypeCount = KorkApi::ConsoleValue::TypeBeginCustom; // tge
 
 // And, we also privately store the types lookup table.
-VectorPtr<ConsoleBaseType*> gConsoleTypeTable;
+std::vector<ConsoleBaseType*> gConsoleTypeTable;
 
 ConsoleBaseType *ConsoleBaseType::getListHead()
 {
@@ -37,8 +38,8 @@ ConsoleBaseType *ConsoleBaseType::getListHead()
 void ConsoleBaseType::initialize()
 {
    // Prep and empty the vector.
-   gConsoleTypeTable.setSize(smConsoleTypeCount+1);
-   dMemset(gConsoleTypeTable.address(), 0, sizeof(ConsoleBaseType*) * gConsoleTypeTable.size());
+   gConsoleTypeTable.resize(smConsoleTypeCount+1);
+   std::fill(gConsoleTypeTable.begin(), gConsoleTypeTable.end(), nullptr);
 
    // Walk the list and register each one with the console system.
    ConsoleBaseType *walk = getListHead();
@@ -46,7 +47,7 @@ void ConsoleBaseType::initialize()
    {
       // Store a pointer to the type in the appropriate slot.
       const S32 id = walk->getTypeID();
-      AssertFatal(gConsoleTypeTable[id]==NULL, "ConsoleBaseType::initialize - encountered a table slot that contained something!");
+      AssertFatal(gConsoleTypeTable[id]==nullptr, "ConsoleBaseType::initialize - encountered a table slot that contained something!");
       gConsoleTypeTable[id] = walk;
 
       // Advance down the list...
@@ -69,31 +70,22 @@ void ConsoleBaseType::registerWithVM(KorkApi::Vm* vm)
 
 void ConsoleBaseType::registerTypeWithVm(KorkApi::Vm* vm)
 {
+   //
    KorkApi::TypeInfo info;
-   info.size = mTypeSize;
-   info.name = StringTable->insert(mTypeName);
-   info.inspectorFieldType = StringTable->insert(mInspectorFieldType);
+   info.fieldSize = mTypeSize;
+   info.valueSize = mValueSize;
+   info.name = vm->internString(mTypeName);
+   info.inspectorFieldType = vm->internString(mInspectorFieldType);
    info.userPtr = this;
-   info.iFuncs.SetValue = [](void* userPtr,
-                             KorkApi::Vm* vm,
-                                     void* dptr,
-                                     S32 argc,
-                             KorkApi::ConsoleValue* argv,
-                                     const EnumTable* tbl,
-                                     BitSet32 flag,
-                             U32 typeId){
-      ConsoleBaseType* typeInfo = (ConsoleBaseType*)userPtr;
-      return typeInfo->setData(vm, dptr, argc, argv, tbl, flag, typeId);
-   };
-   info.iFuncs.CopyValue = [](void* userPtr,
+   info.iFuncs.CastValueFn = [](void* userPtr,
                               KorkApi::Vm* vm,
-                                     void* sptr,
-                                     const EnumTable* tbl,
+                                     KorkApi::TypeStorageInterface* inputStorage,
+                                KorkApi::TypeStorageInterface* outputStorage,
+                                     void* fieldUserPtr,
                                      BitSet32 flag,
-                                     U32 requestedType,
-                              U32 requestedZone){
+                                     U32 requestedType){
       ConsoleBaseType* typeInfo = (ConsoleBaseType*)userPtr;
-      return typeInfo->getData(vm, sptr, tbl, flag, requestedType, requestedZone);
+      return typeInfo->getData(vm, inputStorage, outputStorage, fieldUserPtr, flag, requestedType);
    };
    info.iFuncs.PrepDataFn = [](void* userPtr, KorkApi::Vm* vm,
                                const char* data,
@@ -106,6 +98,14 @@ void ConsoleBaseType::registerTypeWithVm(KorkApi::Vm* vm)
       ConsoleBaseType* typeInfo = (ConsoleBaseType*)userPtr;
       return typeInfo->mTypeName;
    };
+   info.iFuncs.PerformOpFn = [](void* userPtr, 
+                                KorkApi::Vm* vm,
+                                U32 op, 
+                                KorkApi::ConsoleValue lhs,
+                                KorkApi::ConsoleValue rhs){
+      ConsoleBaseType* typeInfo = (ConsoleBaseType*)userPtr;
+      return typeInfo->performOp(vm, op, lhs, rhs);
+   };
    
    S32 vmTypeId = vm->registerType(info);
    AssertFatal(mTypeId != vmTypeId, "Type Id Mismatch");
@@ -117,13 +117,14 @@ ConsoleBaseType  *ConsoleBaseType::getType(const S32 typeID)
 }
 //-------------------------------------------------------------------------
 
-ConsoleBaseType::ConsoleBaseType(const S32 size, S32 *idPtr, const char *aTypeName)
+ConsoleBaseType::ConsoleBaseType(const U32 size, const U32 vsize, S32 *idPtr, const char *aTypeName)
 {
    // General initialization.
-   mInspectorFieldType = NULL;
+   mInspectorFieldType = nullptr;
 
    // Store general info.
    mTypeSize = size;
+   mValueSize = vsize;
    mTypeName = aTypeName;
 
    // Get our type ID and store it.
@@ -142,4 +143,194 @@ ConsoleBaseType::ConsoleBaseType(const S32 size, S32 *idPtr, const char *aTypeNa
 ConsoleBaseType::~ConsoleBaseType()
 {
    // Nothing to do for now; we could unlink ourselves from the list, but why?
+}
+
+using namespace Compiler;
+
+KorkApi::ConsoleValue ConsoleBaseType::performOp(KorkApi::Vm* vm, U32 op, KorkApi::ConsoleValue lhs, KorkApi::ConsoleValue rhs)
+{
+   return lhs;
+}
+
+KorkApi::ConsoleValue ConsoleBaseType::performOpNumeric(KorkApi::Vm* vm, U32 op, KorkApi::ConsoleValue lhs, KorkApi::ConsoleValue rhs)
+{
+   F64 valueL = vm->valueAsFloat(lhs);
+   F64 valueR = vm->valueAsFloat(rhs);
+   
+   switch (op)
+   {
+      // unary
+      case OP_NOT:
+         valueL = !((U64)valueL);
+         break;
+      case OP_NOTF:
+         valueL = !valueL;
+         break;
+      case OP_ONESCOMPLEMENT:
+         valueL = ~((U64)valueL);
+         break;
+      case OP_NEG:
+         valueL = -valueL;
+         break;
+         
+      // comparisons (return 0/1)
+      case OP_CMPEQ: valueL = (valueL == valueR) ? 1.0f : 0.0f; break;
+      case OP_CMPNE: valueL = (valueL != valueR) ? 1.0f : 0.0f; break;
+      case OP_CMPGR: valueL = (valueL >  valueR) ? 1.0f : 0.0f; break;
+      case OP_CMPGE: valueL = (valueL >= valueR) ? 1.0f : 0.0f; break;
+      case OP_CMPLT: valueL = (valueL <  valueR) ? 1.0f : 0.0f; break;
+      case OP_CMPLE: valueL = (valueL <= valueR) ? 1.0f : 0.0f; break;
+      
+      // bitwise (operate on integer views)
+      case OP_XOR:
+         valueL = (F32)(((U64)valueL) ^ ((U64)valueR));
+         break;
+         
+      case OP_BITAND:
+         valueL = (F32)(((U64)valueL) & ((U64)valueR));
+         break;
+         
+      case OP_BITOR:
+         valueL = (F32)(((U64)valueL) | ((U64)valueR));
+         break;
+         
+      case OP_SHR:
+      {
+         const U64 a = (U64)valueL;
+         const U64 b = (U64)valueR;
+         valueL = (F32)(a >> b);
+         break;
+      }
+         
+      case OP_SHL:
+      {
+         const U64 a = (U64)valueL;
+         const U64 b = (U64)valueR;
+         valueL = (F32)(a << b);
+         break;
+      }
+         
+      // logical (return 0/1)
+      case OP_AND:
+         valueL = (valueL != 0.0f && valueR != 0.0f) ? 1.0f : 0.0f;
+         break;
+         
+      case OP_OR:
+         valueL = (valueL != 0.0f || valueR != 0.0f) ? 1.0f : 0.0f;
+         break;
+         
+      // arithmetic
+      case OP_ADD: valueL = valueL + valueR; break;
+      case OP_SUB: valueL = valueL - valueR; break;
+      case OP_MUL: valueL = valueL * valueR; break;
+         
+      case OP_DIV:
+         valueL = (valueR == 0.0f) ? 0.0f : (valueL / valueR);
+         break;
+         
+      case OP_MOD:
+      {
+         const U64 a = (U64)valueL;
+         const U64 b = (U64)valueR;
+         valueL = (b == 0u) ? 0.0f : (F32)(a % b);
+         break;
+      }
+         
+      default:
+         break;
+   }
+   
+   return KorkApi::ConsoleValue::makeNumber(valueL);
+}
+
+KorkApi::ConsoleValue ConsoleBaseType::performOpUnsigned(KorkApi::Vm* vm, U32 op, KorkApi::ConsoleValue lhs, KorkApi::ConsoleValue rhs)
+{
+   U64 valueL = vm->valueAsInt(lhs);
+   U64 valueR = vm->valueAsInt(rhs);
+   
+   switch (op)
+   {
+      // unary
+      case OP_NOT:
+         valueL = !((U64)valueL);
+         break;
+      case OP_NOTF:
+         valueL = !(F64)valueL;
+         break;
+      case OP_ONESCOMPLEMENT:
+         valueL = ~((U64)valueL);
+         break;
+      case OP_NEG:
+         valueL = -valueL;
+         break;
+         
+      // comparisons (return 0/1)
+      case OP_CMPEQ: valueL = (valueL == valueR) ? 1 : 0; break;
+      case OP_CMPNE: valueL = (valueL != valueR) ? 1 : 0; break;
+      case OP_CMPGR: valueL = (valueL >  valueR) ? 1 : 0; break;
+      case OP_CMPGE: valueL = (valueL >= valueR) ? 1 : 0; break;
+      case OP_CMPLT: valueL = (valueL <  valueR) ? 1 : 0; break;
+      case OP_CMPLE: valueL = (valueL <= valueR) ? 1 : 0; break;
+         
+         
+      // bitwise (operate on integer views)
+      case OP_XOR:
+         valueL = (U64)(((U64)valueL) ^ ((U64)valueR));
+         break;
+         
+      case OP_BITAND:
+         valueL = (U64)(((U64)valueL) & ((U64)valueR));
+         break;
+         
+      case OP_BITOR:
+         valueL = (U64)(((U64)valueL) | ((U64)valueR));
+         break;
+         
+      case OP_SHR:
+      {
+         const U64 a = (U64)valueL;
+         const U64 b = (U64)valueR;
+         valueL = (F32)(a >> b);
+         break;
+      }
+         
+      case OP_SHL:
+      {
+         const U64 a = (U64)valueL;
+         const U64 b = (U64)valueR;
+         valueL = (F32)(a << b);
+         break;
+      }
+         
+      // logical (return 0/1)
+      case OP_AND:
+         valueL = (valueL != 0 && valueR != 0) ? 1 : 0;
+         break;
+         
+      case OP_OR:
+         valueL = (valueL != 0 || valueR != 0) ? 1 : 0;
+         break;
+         
+         // arithmetic
+      case OP_ADD: valueL = valueL + valueR; break;
+      case OP_SUB: valueL = valueL - valueR; break;
+      case OP_MUL: valueL = valueL * valueR; break;
+         
+      case OP_DIV:
+         valueL = (valueR == 0) ? 0 : (valueL / valueR);
+         break;
+         
+      case OP_MOD:
+      {
+         const U64 a = (U64)valueL;
+         const U64 b = (U64)valueR;
+         valueL = (b == 0u) ? 0 : (F32)(a % b);
+         break;
+      }
+         
+      default:
+         break;
+   }
+   
+   return KorkApi::ConsoleValue::makeUnsigned(valueL);
 }

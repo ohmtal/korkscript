@@ -1,3 +1,10 @@
+//-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
 #include "console/console.h"
 #include "console/consoleTypes.h"
 #include "sim/simBase.h"
@@ -51,7 +58,7 @@ typedef BaseBridgeObject Parent;
 		{
 			U32 memSize = 0;
 			U8* ret = (U8*)(m3_GetMemory(ptr->mRuntime, &memSize, 0));
-			return allocPos < memSize ? ret + allocPos : NULL;
+			return allocPos < memSize ? ret + allocPos : nullptr;
 		}
 	};
 
@@ -76,9 +83,9 @@ public:
 
 	Wasm3ModuleObject()
 	{
-		mRuntime = NULL;
-		mEnv = NULL;
-		mModule = NULL;
+		mRuntime = nullptr;
+		mEnv = nullptr;
+		mModule = nullptr;
 		memset(mFuncs, '\0', sizeof(mFuncs));
 		memset(mInfos, '\0', sizeof(mInfos));
 		memset(mHostInfos, '\0', sizeof(mHostInfos));
@@ -102,12 +109,12 @@ public:
             M3Result r = m3_Call(mFuncs[0], 1, (const void**)wasmArgv);
             if (r)
             {
-               return NULL;
+               return;
             }
             
             if (m3_GetRetCount(mFuncs[0]) == 0)
             {
-               return NULL;
+               return;
             }
 
             void* retPtr[1] = {};
@@ -116,7 +123,7 @@ public:
             
             if (r)
             {
-               return NULL;
+               return;
             }
             
             mScratchOffset = *((U32*)&wasmArgData[0]);
@@ -128,8 +135,8 @@ public:
 	bool initRuntime() override
    {
       mEnv = m3_NewEnvironment();
-      mRuntime = m3_NewRuntime(mEnv, mMemSize, NULL);
-      return mRuntime != NULL;
+      mRuntime = m3_NewRuntime(mEnv, mMemSize, nullptr);
+      return mRuntime != nullptr;
 	}
 
 	void cleanup() override
@@ -141,8 +148,8 @@ public:
 
 		m3_FreeRuntime(mRuntime);
 		m3_FreeEnvironment(mEnv);
-		mRuntime = NULL;
-		mEnv = NULL;
+		mRuntime = nullptr;
+		mEnv = nullptr;
 	}
 
 	bool load(Stream& s) override
@@ -153,12 +160,12 @@ public:
       
       M3Result res = m3_ParseModule(mEnv, &mModule, bytes, sz);
       
-      if (res == NULL)
+      if (res == nullptr)
       {
          res = m3_LoadModule(mRuntime, mModule);
       }
       
-      return res == NULL;
+      return res == nullptr;
 	}
 
    bool linkFuncs() override
@@ -170,8 +177,8 @@ public:
 
 		for (U32 i=0; i<MAX_FUNCS; i++)
 		{
-			if (mHostFuncs[i] != NULL && mHostFuncs[i] != StringTable->EmptyString && 
-				mHostFuncSignatures[i] != NULL && mHostFuncSignatures[i] != StringTable->EmptyString &&
+			if (mHostFuncs[i] != nullptr && mHostFuncs[i] != StringTable->EmptyString && 
+				mHostFuncSignatures[i] != nullptr && mHostFuncSignatures[i] != StringTable->EmptyString &&
 				isSigValid(mHostFuncSignatures[i]))
 			{
 				char realSig[32];
@@ -189,7 +196,7 @@ public:
 					                                thunkHostCall, 
 					                                hostInfo);
             
-            if (res != NULL)
+            if (res != nullptr)
             {
                Con::warnf("Function %s %s not bound (%s)", mHostFuncs[i], realSig, res);
             }
@@ -200,8 +207,8 @@ public:
 
       for (U32 i=0; i<MAX_FUNCS; i++)
       {
-         if (mFuncNames[i] != NULL && mFuncNames[i] != StringTable->EmptyString &&
-            mFuncSignatures[i] != NULL && mFuncSignatures[i] != StringTable->EmptyString &&
+         if (mFuncNames[i] != nullptr && mFuncNames[i] != StringTable->EmptyString &&
+            mFuncSignatures[i] != nullptr && mFuncSignatures[i] != StringTable->EmptyString &&
             isSigValid(mFuncSignatures[i]))
          {
             auto* info = &mInfos[i];
@@ -210,7 +217,7 @@ public:
             U32 paramCount = getSigParamCount(mFuncSignatures[i]);
             
             M3Result result = m3_FindFunction(&mFuncs[i], mRuntime, mFuncNames[i]);
-            if (result != NULL)
+            if (result != nullptr)
             {
                Con::warnf("Can't find function %s %s (%s)", mFuncNames[i], mFuncSignatures[i], result);
             }
@@ -326,7 +333,7 @@ public:
 	    if (retCh == 'v' || m3_GetRetCount(func) == 0)
 	    {
 	        outBuf[0] = '\0';
-	        return KorkApi::ConsoleValue::makeString(NULL);
+	        return KorkApi::ConsoleValue::makeString(nullptr);
 	    }
 
         void* retPtr[1] = {};
@@ -346,7 +353,7 @@ public:
 	        if (!mem || off >= memSize)
 	        {
 	            outBuf[0] = '\0';
-		         return KorkApi::ConsoleValue::makeString(NULL);
+		         return KorkApi::ConsoleValue::makeString(nullptr);
 	        }
 
 	        const char* strInMem = (const char*)(mem + off);
@@ -402,7 +409,7 @@ public:
 	    }
 	    else
 	    {
-	        return KorkApi::ConsoleValue::makeString(NULL);
+	        return KorkApi::ConsoleValue::makeString(nullptr);
 	    }
 	}
 

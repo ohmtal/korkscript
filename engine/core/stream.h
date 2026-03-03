@@ -28,6 +28,8 @@
 #include "platform/platform.h"
 #endif
 
+class _StringTable;
+
 
 // This should ideally be done with templates...
 //
@@ -120,9 +122,6 @@ class Stream {
    /// writes a line to the stream
    void writeLine(U8 *buffer);
 
-   /// Reads a string and inserts it into the StringTable
-   /// @see StringTable
-   const char *readSTString(bool casesens = false);
    /// Reads a string of maximum 255 characters long
    virtual void readString(char stringBuf[256]);
    /// Reads a string that could potentially be more than 255 characters long.
@@ -138,13 +137,9 @@ class Stream {
 
    /// Writes a string to the stream.
    virtual void writeString(const char *stringBuf, S32 maxLen=255);
-
-   /// Writes a formatted buffer to the stream.
-   /// NOTE: A maximum string length of 4K is allowed.
-   bool writeFormattedBuffer(const char *format, ...);
-
-   /// Writes a NULL terminated string buffer.
-   bool writeStringBuffer(const char* buffer) { return write( dStrlen(buffer), buffer ); }
+   
+   /// Writes a nullptr terminated string buffer.
+   bool writeStringBuffer(const char* buffer) { return write( (U32)strlen(buffer), buffer ); }
 
    // Overloaded write and read ops..
   public:
@@ -206,5 +201,81 @@ class Stream {
          write(3, (void*)tab);
    }
 };
+
+
+class IFFBlock
+{
+public:
+
+   U32 ident;
+protected:
+   U32 size;
+   
+public:
+   IFFBlock() : ident(0), size(0) {;}
+   
+   inline U32 getSize() const
+   {
+      return (U32)dAlignSize(size, 2);
+   }
+   
+   inline U32 getRawSize() const { return size; }
+   
+   void setSize(U32 val) { size = val; }
+   
+   inline void seekToEnd(U32 startPos, Stream &stream)
+   {
+      stream.setPosition(startPos + getSize() + 8);
+   }
+
+   inline bool writePad(Stream& stream)
+   {
+      U32 alignSize = (U32)dAlignSize(size, 2);
+      if (alignSize != size)
+      {
+         return stream.write((U8)0);
+      }
+      return true;
+   }
+
+   inline bool readPad(Stream& stream)
+   {
+      U32 alignSize = (U32)dAlignSize(size, 2);
+      if (alignSize != size)
+      {
+         U8 padByte = 0;
+         return stream.read(&padByte);
+      }
+      return true;
+   }
+
+   bool updateSize(Stream& stream, U32 offset)
+   {
+      U32 newPos = stream.getPosition();
+      S64 newSize = (S64)newPos - (S64)offset - 8;
+      if (newSize < 0)
+      {
+         return false; // ???
+      }
+      
+      stream.setPosition(offset + 4);
+      size = (U32)newSize;
+      stream.write(size);
+      stream.setPosition(newPos);
+      return true;
+   }
+   
+   U32 getNextBlockPosition(U32 bytesInBlock)
+   {
+      return (U32)dAlignSize(size, 2) - bytesInBlock;
+   }
+
+   inline bool seekNext(Stream& stream, U32 bytesInBlock)
+   {
+      U32 eobBytes = (U32)dAlignSize(size, 2) - bytesInBlock;
+      return stream.setPosition(stream.getPosition() + eobBytes);
+   }
+};
+
 
 #endif //_STREAM_H_

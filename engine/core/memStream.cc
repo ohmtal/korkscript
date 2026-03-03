@@ -32,7 +32,7 @@ MemStream::MemStream(const U32 in_bufferSize,
    m_instCaps(0),
    m_currentPosition(0)
 {
-   AssertFatal(io_pBuffer != NULL, "Invalid buffer pointer");
+   AssertFatal(io_pBuffer != nullptr, "Invalid buffer pointer");
    AssertFatal(in_bufferSize > 0,  "Invalid buffer size");
    AssertFatal(in_allowRead || in_allowWrite, "Either write or read must be allowed");
 
@@ -46,7 +46,7 @@ MemStream::MemStream(const U32 in_bufferSize,
 
 MemStream::~MemStream()
 {
-   m_pBufferBase     = NULL;
+   m_pBufferBase     = nullptr;
    m_currentPosition = 0;
 
    setStatus(Closed);
@@ -105,7 +105,7 @@ bool MemStream::_read(const U32 in_numBytes, void *out_pBuffer)
    if (in_numBytes == 0)
       return true;
 
-   AssertFatal(out_pBuffer != NULL, "Invalid output buffer");
+   AssertFatal(out_pBuffer != nullptr, "Invalid output buffer");
 
    if (hasCapability(StreamRead) == false) {
       AssertWarn(false, "Reading is disallowed on this stream");
@@ -122,7 +122,7 @@ bool MemStream::_read(const U32 in_numBytes, void *out_pBuffer)
 
    // Obtain a current pointer, and do the copy
    const void* pCurrent = (const void*)((const U8*)m_pBufferBase + m_currentPosition);
-   dMemcpy(out_pBuffer, pCurrent, actualBytes);
+   memcpy(out_pBuffer, pCurrent, actualBytes);
 
    // Advance the stream position
    m_currentPosition += actualBytes;
@@ -142,7 +142,7 @@ bool MemStream::_write(const U32 in_numBytes, const void *in_pBuffer)
    if (in_numBytes == 0)
       return true;
 
-   AssertFatal(in_pBuffer != NULL, "Invalid input buffer");
+   AssertFatal(in_pBuffer != nullptr, "Invalid input buffer");
 
    if (hasCapability(StreamWrite) == false) {
       AssertWarn(0, "Writing is disallowed on this stream");
@@ -159,7 +159,7 @@ bool MemStream::_write(const U32 in_numBytes, const void *in_pBuffer)
 
    // Obtain a current pointer, and do the copy
    void* pCurrent = (void*)((U8*)m_pBufferBase + m_currentPosition);
-   dMemcpy(pCurrent, in_pBuffer, actualBytes);
+   memcpy(pCurrent, in_pBuffer, actualBytes);
 
    // Advance the stream position
    m_currentPosition += actualBytes;

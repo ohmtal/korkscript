@@ -31,6 +31,8 @@
 #include "platform/platformMemory.h"
 #endif
 
+#include <functional>
+
 #ifndef TORQUE_NET_DEFAULT_MULTICAST_ADDRESS
 #define TORQUE_NET_DEFAULT_MULTICAST_ADDRESS "ff04::7467::656E::6574::776C"
 #endif
@@ -92,10 +94,10 @@ struct NetAddress
       switch (type)
       {
          case NetAddress::IPAddress:
-            return (dMemcmp(other.address.ipv4.netNum, address.ipv4.netNum, 4) == 0);
+            return (memcmp(other.address.ipv4.netNum, address.ipv4.netNum, 4) == 0);
             break;
          case NetAddress::IPV6Address:
-            return (dMemcmp(other.address.ipv6.netNum, address.ipv6.netNum, 16) == 0);
+            return (memcmp(other.address.ipv6.netNum, address.ipv6.netNum, 16) == 0);
             break;
          case NetAddress::IPBroadcastAddress:
             return true;
@@ -116,10 +118,10 @@ struct NetAddress
       switch (type)
       {
          case NetAddress::IPAddress:
-            return (dMemcmp(other.address.ipv4.netNum, address.ipv4.netNum, 4) == 0) && other.port == port;
+            return (memcmp(other.address.ipv4.netNum, address.ipv4.netNum, 4) == 0) && other.port == port;
             break;
          case NetAddress::IPV6Address:
-            return (dMemcmp(other.address.ipv6.netNum, address.ipv6.netNum, 16) == 0) && other.port == port;
+            return (memcmp(other.address.ipv6.netNum, address.ipv6.netNum, 16) == 0) && other.port == port;
             break;
          case NetAddress::IPBroadcastAddress:
             return true;
@@ -140,10 +142,10 @@ struct NetAddress
       switch (type)
       {
          case NetAddress::IPAddress:
-            return other.port == port && (dMemcmp(other.address.ipv4.netNum, address.ipv4.netNum, 4) == 0);
+            return other.port == port && (memcmp(other.address.ipv4.netNum, address.ipv4.netNum, 4) == 0);
             break;
          case NetAddress::IPV6Address:
-            return other.port == port && other.address.ipv6.netFlow == address.ipv6.netFlow && other.address.ipv6.netScope == address.ipv6.netScope && (dMemcmp(other.address.ipv6.netNum, address.ipv6.netNum, 16) == 0);
+            return other.port == port && other.address.ipv6.netFlow == address.ipv6.netFlow && other.address.ipv6.netScope == address.ipv6.netScope && (memcmp(other.address.ipv6.netNum, address.ipv6.netNum, 16) == 0);
             break;
          case NetAddress::IPBroadcastAddress:
             return other.port == port;
@@ -208,6 +210,11 @@ struct Net
       Disconnected
    };
 
+   enum
+   {
+      MaxPacketDataSize = 1500
+   };
+
    static bool smMulticastEnabled;
    static bool smIpv4Enabled;
    static bool smIpv6Enabled;
@@ -215,6 +222,21 @@ struct Net
    static bool init();
    static void shutdown();
    static void process();
+
+   using PacketReceiveCallback = std::function<void(const NetAddress& from, const U8* data, S32 size)>;
+
+   using ConnectedNotifyCallback  = std::function<void(NetSocket sock, Net::ConnectionState state)>;
+
+   using ConnectedAcceptCallback  = std::function<void(NetSocket listenSock,
+                                                      NetSocket newSock,
+                                                      const NetAddress& from)>;
+
+   using ConnectedReceiveCallback = std::function<void(NetSocket sock, const U8* data, S32 size)>;
+
+   static void setPacketReceiveCallback(PacketReceiveCallback cb);
+   static void setConnectedNotifyCallback(ConnectedNotifyCallback cb);
+   static void setConnectedAcceptCallback(ConnectedAcceptCallback cb);
+   static void setConnectedReceiveCallback(ConnectedReceiveCallback cb);
 
    // Unreliable net functions (UDP)
    // sendto is for sending data
@@ -232,7 +254,7 @@ struct Net
    static NetSocket openListenPort(U16 port, NetAddress::Type = NetAddress::IPAddress);
    static NetSocket openConnectTo(const char *stringAddress); // does the DNS resolve etc.
    static void closeConnectTo(NetSocket socket);
-   static Error sendtoSocket(NetSocket socket, const U8 *buffer, S32 bufferSize, S32 *bytesWritten=NULL);
+   static Error sendtoSocket(NetSocket socket, const U8 *buffer, S32 bufferSize, S32 *bytesWritten=nullptr);
 
    static bool compareAddresses(const NetAddress *a1, const NetAddress *a2);
    static Net::Error stringToAddress(const char *addressString, NetAddress *address, bool hostLookup=true, NetAddress::Type requiredType = NetAddress::Invalid);
@@ -242,7 +264,7 @@ struct Net
    static NetSocket openSocket();
    static Error closeSocket(NetSocket socket);
 
-   static Error send(NetSocket socket, const U8 *buffer, S32 bufferSize, S32 *outBytesWritten=NULL);
+   static Error send(NetSocket socket, const U8 *buffer, S32 bufferSize, S32 *outBytesWritten=nullptr);
    static Error recv(NetSocket socket, U8 *buffer, S32 bufferSize, S32 *bytesRead);
 
    static Error connect(NetSocket socket, const NetAddress *address);

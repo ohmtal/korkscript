@@ -21,7 +21,7 @@
 //-----------------------------------------------------------------------------
 
 #include "platform/types.h"
-#include "core/tVector.h"
+#include <vector>
 #include "platform/threads/mutex.h"
 
 #ifndef _PLATFORM_THREADS_THREAD_H_
@@ -95,13 +95,13 @@ class ThreadManager
 {
    static ThreadManager* singleton()
    {
-      static ThreadManager* man = NULL;
+      static ThreadManager* man = nullptr;
       if(!man) man = new ThreadManager;
       AssertISV(man, "Thread manager doesn't exist.");
       return man;
    }
 
-   Vector<Thread*> threadPool;
+   std::vector<Thread*> threadPool;
    Mutex poolLock;
    
 public:
@@ -142,7 +142,7 @@ public:
       {
          if(manager.threadPool[i]->getId() == threadID)
          {
-            manager.threadPool.erase(i);
+            manager.threadPool.erase(manager.threadPool.begin()+i);
             break;
          }
       }
@@ -155,11 +155,11 @@ public:
    static Thread* getThreadById(ThreadIdent threadid)
    {
       AssertFatal(threadid != 0, "ThreadManager::getThreadById() Searching for a bad thread id.");
-      Thread* ret = NULL;
+      Thread* ret = nullptr;
       
       singleton()->poolLock.lock();
-      Vector<Thread*> &pool = singleton()->threadPool;
-      for( S32 i = pool.size() - 1; i >= 0; i--)
+      std::vector<Thread*> &pool = singleton()->threadPool;
+      for( size_t i = pool.size() - 1; i >= 0; i--)
       {
          Thread* p = pool[i];
          if(compare(p->getId(), threadid))

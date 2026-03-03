@@ -1,4 +1,11 @@
 //-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
 // Copyright (c) 2012 GarageGames, LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -22,21 +29,26 @@
 
 #include "core/torqueConfig.h"
 #include "platform/platformNetwork.h"
+#include "platform/platformString.h"
 #include "platform/threads/mutex.h"
 //#include "platform/event.h"
 #include "core/hashFunction.h"
-#include "console/console.h"
 #include "core/fileStream.h"
-#include "core/tVector.h"
 #include "platform/platformNetAsync.h"
 //#include "platform/gameInterface.h"
 #include <string.h>
 #include <stdio.h>
-#include "core/freeListHandleHelpers.h"
 #include <algorithm>
+#include "console/console.h"
 
 // jamesu - debug DNS
 //#define TORQUE_DEBUG_LOOKUPS
+
+Net::PacketReceiveCallback        gPacketReceiveCB;
+Net::ConnectedNotifyCallback      gConnectedNotifyCB;
+Net::ConnectedAcceptCallback      gConnectedAcceptCB;
+Net::ConnectedReceiveCallback     gConnectedReceiveCB;
+
 
 namespace PlatformNetState
 {
@@ -65,7 +77,7 @@ namespace PlatformNetState
       if (strlen(addressString) > 255)
          return false;
       
-      char *portString = NULL;
+      char *portString = nullptr;
       
       if (addressString[0] == '[')
       {
@@ -80,7 +92,7 @@ namespace PlatformNetState
             *portString++ = '\0';
             if (*portString != ':')
             {
-               portString = NULL;
+               portString = nullptr;
             }
             else
             {
@@ -277,7 +289,7 @@ public:
       }
    };
    
-   Vector<EntryType> mSocketList;
+   std::vector<EntryType> mSocketList;
    Mutex *mMutex;
    
    ReservedSocketList()
@@ -369,13 +381,13 @@ namespace PlatformNetState
    
    struct addrinfo* pickAddressByProtocol(struct addrinfo* addr, int protocol)
    {
-      for (; addr != NULL; addr = addr->ai_next)
+      for (; addr != nullptr; addr = addr->ai_next)
       {
          if (addr->ai_family == protocol)
             return addr;
       }
       
-      return NULL;
+      return nullptr;
    }
 
    Net::Error getSocketAddress(SOCKET socketFd, int requiredFamily, NetAddress *outAddress)
@@ -428,8 +440,8 @@ template<class T> NetSocket ReservedSocketList<T>::reserve(SOCKET reserveId, boo
       handle.lock(mMutex, true);
    }
    
-   S32 idx = mSocketList.find_next(EntryType());
-   if (idx == -1)
+   auto itr = std::find(mSocketList.begin(), mSocketList.end(), EntryType());
+   if (itr == mSocketList.end())
    {
       EntryType entry;
       entry.value = reserveId;
@@ -439,12 +451,12 @@ template<class T> NetSocket ReservedSocketList<T>::reserve(SOCKET reserveId, boo
    }
    else
    {
-      EntryType &entry = mSocketList[idx];
+      EntryType &entry = *itr;
       entry.used = true;
       entry.value = reserveId;
    }
    
-   return NetSocket::fromHandle(idx);
+   return NetSocket::fromHandle(itr - mSocketList.begin());
 }
 
 template<class T> void ReservedSocketList<T>::remove(NetSocket socketToRemove, bool doLock)
@@ -552,10 +564,10 @@ struct PolledSocket
 };
 
 // list of polled sockets
-static Vector<PolledSocket*> gPolledSockets( __FILE__, __LINE__ );
+static std::vector<PolledSocket*> gPolledSockets;
 
 static PolledSocket* addPolledSocket(NetSocket handleFd, SOCKET fd, S32 state,
-                                     char* remoteAddr = NULL, S32 port = -1)
+                                     char* remoteAddr = nullptr, S32 port = -1)
 {
    PolledSocket* sock = new PolledSocket();
    sock->fd = fd;
@@ -581,7 +593,7 @@ bool netSocketWaitForWritable(NetSocket handleFd, S32 timeoutMs)
    timeout.tv_sec = timeoutMs / 1000;
    timeout.tv_usec = ( timeoutMs % 1000 ) * 1000;
    
-   if( select(socketFd + 1, NULL, &writefds, NULL, &timeout) > 0 )
+   if( select(socketFd + 1, nullptr, &writefds, nullptr, &timeout) > 0 )
       return true;
    
    return false;
@@ -608,7 +620,7 @@ void Net::shutdown()
    
    while (gPolledSockets.size() > 0)
    {
-      if (gPolledSockets[0] == NULL)
+      if (gPolledSockets[0] == nullptr)
          gPolledSockets.erase(gPolledSockets.begin());
       else
          closeConnectTo(gPolledSockets[0]->handleFd);
@@ -631,7 +643,7 @@ void Net::shutdown()
 
 static void NetAddressToIPSocket(const NetAddress *address, struct sockaddr_in *sockAddr)
 {
-   dMemset(sockAddr, 0, sizeof(struct sockaddr_in));
+   memset(sockAddr, 0, sizeof(struct sockaddr_in));
    sockAddr->sin_family = AF_INET;
    sockAddr->sin_port = htons(address->port);
 #if defined(TORQUE_OS_BSD) || defined(TORQUE_OS_MAC) || defined(TORQUE_OS_OSX) || defined(TORQUE_OS_IOS)
@@ -643,7 +655,7 @@ static void NetAddressToIPSocket(const NetAddress *address, struct sockaddr_in *
    }
    else
    {
-      dMemcpy(&sockAddr->sin_addr, &address->address.ipv4.netNum[0], 4);
+      memcpy(&sockAddr->sin_addr, &address->address.ipv4.netNum[0], 4);
    }
 }
 
@@ -651,14 +663,14 @@ static void IPSocketToNetAddress(const struct sockaddr_in *sockAddr, NetAddress 
 {
    address->type = NetAddress::IPAddress;
    address->port = ntohs(sockAddr->sin_port);
-   dMemcpy(&address->address.ipv4.netNum[0], &sockAddr->sin_addr, 4);
+   memcpy(&address->address.ipv4.netNum[0], &sockAddr->sin_addr, 4);
 }
 
 // ipv6 version of name routines
 
 static void NetAddressToIPSocket6(const NetAddress *address, struct sockaddr_in6 *sockAddr)
 {
-   dMemset(sockAddr, 0, sizeof(struct sockaddr_in6));
+   memset(sockAddr, 0, sizeof(struct sockaddr_in6));
 #ifdef SIN6_LEN
    sockAddr->sin6_len = sizeof(struct sockaddr_in6);
 #endif
@@ -674,7 +686,7 @@ static void NetAddressToIPSocket6(const NetAddress *address, struct sockaddr_in6
    {
       sockAddr->sin6_flowinfo = address->address.ipv6.netFlow;
       sockAddr->sin6_scope_id = address->address.ipv6.netScope;
-      dMemcpy(&sockAddr->sin6_addr, address->address.ipv6.netNum, sizeof(address->address.ipv6.netNum));
+      memcpy(&sockAddr->sin6_addr, address->address.ipv6.netNum, sizeof(address->address.ipv6.netNum));
    }
 }
 
@@ -682,7 +694,7 @@ static void IPSocket6ToNetAddress(const struct sockaddr_in6 *sockAddr, NetAddres
 {
    address->type = NetAddress::IPV6Address;
    address->port = ntohs(sockAddr->sin6_port);
-   dMemcpy(address->address.ipv6.netNum, &sockAddr->sin6_addr, sizeof(address->address.ipv6.netNum));
+   memcpy(address->address.ipv6.netNum, &sockAddr->sin6_addr, sizeof(address->address.ipv6.netNum));
    address->address.ipv6.netFlow = sockAddr->sin6_flowinfo;
    address->address.ipv6.netScope = sockAddr->sin6_scope_id;
 }
@@ -690,16 +702,7 @@ static void IPSocket6ToNetAddress(const struct sockaddr_in6 *sockAddr, NetAddres
 //
 
 NetSocket Net::openListenPort(U16 port, NetAddress::Type addressType)
-{
-#ifdef TORQUE_ALLOW_JOURNALING
-   if(Game->isJournalReading())
-   {
-      U32 ret;
-      Game->journalRead(&ret);
-      return NetSocket::fromHandle(ret);
-   }
-#endif
-   
+{  
    Net::Error error = NoError;
    NetAddress address;
    if (Net::getListenAddress(addressType, &address) != Net::NoError)
@@ -750,23 +753,11 @@ NetSocket Net::openListenPort(U16 port, NetAddress::Type addressType)
       addPolledSocket(handleFd, sockId, PolledSocket::Listening);
    }
    
-#ifdef TORQUE_ALLOW_JOURNALING
-   if(Game->isJournalWriting())
-      Game->journalWrite(U32(handleFd.getHandle()));
-#endif
    return handleFd;
 }
 
 NetSocket Net::openConnectTo(const char *addressString)
 {
-#ifdef TORQUE_ALLOW_JOURNALING
-   if (Game->isJournalReading())
-   {
-      U32 ret;
-      Game->journalRead(&ret);
-      return NetSocket::fromHandle(ret);
-   }
-#endif
    NetAddress address;
    NetSocket handleFd = NetSocket::INVALID;
    Net::Error error = NoError;
@@ -873,26 +864,18 @@ NetSocket Net::openConnectTo(const char *addressString)
       closeSocket(handleFd);
       handleFd = NetSocket::INVALID;
    }
-#ifdef TORQUE_ALLOW_JOURNALING
-   if (Game->isJournalWriting())
-      Game->journalWrite(U32(handleFd.getHandle()));
-#endif
    return handleFd;
 }
 
 void Net::closeConnectTo(NetSocket handleFd)
 {
-#ifdef TORQUE_ALLOW_JOURNALING
-   if(Game->isJournalReading())
-      return;
-#endif
    // if this socket is in the list of polled sockets, remove it
    for (S32 i = 0; i < gPolledSockets.size(); ++i)
    {
       if (gPolledSockets[i] && gPolledSockets[i]->handleFd == handleFd)
       {
          delete gPolledSockets[i];
-         gPolledSockets[i] = NULL;
+         gPolledSockets[i] = nullptr;
          break;
       }
    }
@@ -902,28 +885,8 @@ void Net::closeConnectTo(NetSocket handleFd)
 
 Net::Error Net::sendtoSocket(NetSocket handleFd, const U8 *buffer, S32  bufferSize, S32 *outBufferWritten)
 {
-#ifdef TORQUE_ALLOW_JOURNALING
-   if(Game->isJournalReading())
-   {
-      U32 e;
-      U32 outBytes;
-      Game->journalRead(&e);
-      Game->journalRead(&outBytes);
-      if (outBufferWritten)
-         *outBufferWritten = outBytes;
-      
-      return (Net::Error) e;
-   }
-#endif
    S32 outBytes = 0;
    Net::Error e = send(handleFd, buffer, bufferSize, &outBytes);
-#ifdef TORQUE_ALLOW_JOURNALING
-   if (Game->isJournalWriting())
-   {
-      Game->journalWrite(U32(e));
-      Game->journalWrite(outBytes);
-   }
-#endif
    if (outBufferWritten)
       *outBufferWritten = outBytes;
    
@@ -1087,10 +1050,6 @@ void Net::closePort()
 
 Net::Error Net::sendto(const NetAddress *address, const U8 *buffer, S32  bufferSize)
 {
-#ifdef TORQUE_ALLOW_JOURNALING
-   if(Game->isJournalReading())
-      return NoError;
-#endif
    SOCKET socketFd;
    
    if(address->type == NetAddress::IPAddress || address->type == NetAddress::IPBroadcastAddress)
@@ -1137,7 +1096,6 @@ Net::Error Net::sendto(const NetAddress *address, const U8 *buffer, S32  bufferS
 
 void Net::process()
 {
-#if TOFIX
    // Process listening sockets
    processListenSocket(PlatformNetState::udpSocket);
    processListenSocket(PlatformNetState::udp6Socket);
@@ -1148,16 +1106,12 @@ void Net::process()
    if (gPolledSockets.size() == 0)
       return;
    
-   static ConnectedNotifyEvent notifyEvent;
-   static ConnectedAcceptEvent acceptEvent;
-   static ConnectedReceiveEvent cReceiveEvent;
-   
    S32 optval;
    socklen_t optlen = sizeof(S32);
    S32 bytesRead;
    Net::Error err;
    bool removeSock = false;
-   PolledSocket *currentSock = NULL;
+   PolledSocket *currentSock = nullptr;
    NetSocket incomingHandleFd = NetSocket::INVALID;
    NetAddress out_h_addr;
    S32 out_h_length = 0;
@@ -1170,9 +1124,9 @@ void Net::process()
       currentSock = gPolledSockets[i];
       
       // Cleanup if we've removed it
-      if (currentSock == NULL)
+      if (currentSock == nullptr)
       {
-         gPolledSockets.erase(i);
+         gPolledSockets.erase(gPolledSockets.begin()+i);
          continue;
       }
       
@@ -1191,9 +1145,10 @@ void Net::process()
                removeSock = true;
                removeSockHandle = currentSock->handleFd;
                
-               notifyEvent.state = Net::ConnectFailed;
-               notifyEvent.tag = currentSock->handleFd.getHandle();
-               Game->postEvent(notifyEvent);
+               if (gConnectedNotifyCB)
+               {
+                  gConnectedNotifyCB(currentSock->handleFd, Net::ConnectFailed);
+               }
             }
             else
             {
@@ -1209,9 +1164,10 @@ void Net::process()
                      break;
                   
                   currentSock->state = PolledSocket::Connected;
-                  notifyEvent.state = Net::Connected;
-                  notifyEvent.tag = currentSock->handleFd.getHandle();
-                  Game->postEvent(notifyEvent);
+                  if (gConnectedNotifyCB)
+                  {
+                     gConnectedNotifyCB(currentSock->handleFd, Net::Connected);
+                  }
                }
                else
                {
@@ -1220,10 +1176,11 @@ void Net::process()
                   
                   removeSock = true;
                   removeSockHandle = currentSock->handleFd;
-                  
-                  notifyEvent.state = Net::ConnectFailed;
-                  notifyEvent.tag = currentSock->handleFd.getHandle();
-                  Game->postEvent(notifyEvent);
+
+                  if (gConnectedNotifyCB)
+                  {
+                     gConnectedNotifyCB(currentSock->handleFd, Net::ConnectFailed);
+                  }
                }
             }
             break;
@@ -1231,45 +1188,40 @@ void Net::process()
             
             // try to get some data
             bytesRead = 0;
-            err = Net::recv(currentSock->handleFd, (U8*)cReceiveEvent.data, MaxPacketDataSize, &bytesRead);
-            if(err == Net::NoError)
+
+            U8 recvBuf[MaxPacketDataSize];
+            bytesRead = 0;
+            err = Net::recv(currentSock->handleFd, recvBuf, MaxPacketDataSize, &bytesRead);
+
+            if (err == Net::NoError)
             {
                if (bytesRead > 0)
                {
-                  // got some data, post it
-                  cReceiveEvent.size = ConnectedReceiveEventHeaderSize +
-                  bytesRead;
-                  cReceiveEvent.tag = currentSock->handleFd.getHandle();
-                  Game->postEvent(cReceiveEvent);
+                  if (gConnectedReceiveCB)
+                  {
+                     gConnectedReceiveCB(currentSock->handleFd, recvBuf, bytesRead);
+                  }
                }
                else
                {
-                  // ack! this shouldn't happen
-                  if (bytesRead < 0)
-                  {
-                     Con::errorf("Unexpected error on socket: %s", strerror(errno));
-                  }
-                  
                   removeSock = true;
                   removeSockHandle = currentSock->handleFd;
-                  
-                  // zero bytes read means EOF
-                  notifyEvent.tag = currentSock->handleFd.getHandle();
-                  notifyEvent.state = Net::Disconnected;
-                  notifyEvent.tag = currentSock->handleFd.getHandle();
-                  Game->postEvent(notifyEvent);
+
+                  if (gConnectedNotifyCB)
+                  {
+                     gConnectedNotifyCB(currentSock->handleFd, Net::Disconnected);
+                  }
                }
             }
-            else if (err != Net::NoError && err != Net::WouldBlock)
+            else if (err != Net::WouldBlock)
             {
-               Con::errorf("Error reading from socket: %s",  strerror(errno));
-               
                removeSock = true;
                removeSockHandle = currentSock->handleFd;
-               
-               notifyEvent.state = Net::Disconnected;
-               notifyEvent.tag = currentSock->handleFd.getHandle();
-               Game->postEvent(notifyEvent);
+
+               if (gConnectedNotifyCB)
+               {
+                  gConnectedNotifyCB(currentSock->handleFd, Net::Disconnected);
+               }
             }
             break;
          case PolledSocket::NameLookupRequired:
@@ -1284,7 +1236,6 @@ void Net::process()
             if (out_h_length == -1)
             {
                Con::errorf("DNS lookup failed: %s", currentSock->remoteAddr);
-               notifyEvent.state = Net::DNSFailed;
                newState = Net::DNSFailed;
                removeSock = true;
                removeSockHandle = currentSock->handleFd;
@@ -1293,7 +1244,7 @@ void Net::process()
             {
                // try to connect
                out_h_addr.port = currentSock->remotePort;
-               const sockaddr *ai_addr = NULL;
+               const sockaddr *ai_addr = nullptr;
                int ai_addrlen = 0;
                sockaddr_in socketAddress;
                sockaddr_in6 socketAddress6;
@@ -1336,7 +1287,6 @@ void Net::process()
                {
                   Con::errorf("Error connecting to %s: Invalid Protocol",
                               currentSock->remoteAddr);
-                  notifyEvent.state = Net::ConnectFailed;
                   newState = Net::ConnectFailed;
                   removeSock = true;
                   removeSockHandle = currentSock->handleFd;
@@ -1352,40 +1302,46 @@ void Net::process()
                      {
                         Con::errorf("Error connecting to %s: %u",
                                     currentSock->remoteAddr, err);
-                        notifyEvent.state = Net::ConnectFailed;
                         newState = Net::ConnectFailed;
                         removeSock = true;
                         removeSockHandle = currentSock->handleFd;
                      }
                      else
                      {
-                        notifyEvent.state = Net::DNSResolved;
                         newState = Net::DNSResolved;
                         currentSock->state = PolledSocket::ConnectionPending;
                      }
                   }
                   else
                   {
-                     notifyEvent.state = Net::Connected;
                      newState = Net::Connected;
                      currentSock->state = Connected;
                   }
                }
             }
-            notifyEvent.tag = currentSock->handleFd.getHandle();
-            Game->postEvent(notifyEvent);
+            if (gConnectedNotifyCB)
+            {
+               gConnectedNotifyCB(currentSock->handleFd, (Net::ConnectionState)newState);
+            }
             break;
          case PolledSocket::Listening:
-            
-            incomingHandleFd = Net::accept(currentSock->handleFd, &acceptEvent.address);
-            if(incomingHandleFd != NetSocket::INVALID)
+         {
+            NetAddress fromAddr;
+            incomingHandleFd = Net::accept(currentSock->handleFd, &fromAddr);
+
+            if (incomingHandleFd != NetSocket::INVALID)
             {
                setBlocking(incomingHandleFd, false);
-               addPolledSocket(incomingHandleFd, PlatformNetState::smReservedSocketList.resolve(incomingHandleFd), Connected);
-               acceptEvent.portTag = currentSock->handleFd.getHandle();
-               acceptEvent.connectionTag = incomingHandleFd.getHandle();
-               Game->postEvent(acceptEvent);
+               addPolledSocket(incomingHandleFd,
+                               PlatformNetState::smReservedSocketList.resolve(incomingHandleFd),
+                               Connected);
+
+               if (gConnectedAcceptCB)
+               {
+                  gConnectedAcceptCB(currentSock->handleFd, incomingHandleFd, fromAddr);
+               }
             }
+         }
             break;
       }
       
@@ -1396,15 +1352,14 @@ void Net::process()
       else
          i++;
    }
-   #endif
 }
 
 void Net::processListenSocket(NetSocket socketHandle)
 {
-   #if TOFIX
    if (socketHandle == NetSocket::INVALID)
       return;
-   PacketReceiveEvent receiveEvent;
+   U8 recvBuf[MaxPacketDataSize];
+   NetAddress from;
    
    sockaddr_storage sa;
    sa.ss_family = AF_UNSPEC;
@@ -1417,33 +1372,37 @@ void Net::processListenSocket(NetSocket socketHandle)
       S32 bytesRead = -1;
       
       if (socketHandle != NetSocket::INVALID)
-         bytesRead = ::recvfrom(socketFd, (char *)receiveEvent.data, MaxPacketDataSize, 0, (struct sockaddr*)&sa, &addrLen);
+      {
+         bytesRead = ::recvfrom(socketFd, (char*)recvBuf, MaxPacketDataSize, 0,
+                       (struct sockaddr*)&sa, &addrLen);
+      }
       
       if (bytesRead == -1)
          break;
       
       if (sa.ss_family == AF_INET)
-         IPSocketToNetAddress((sockaddr_in *)&sa, &receiveEvent.sourceAddress);
+         IPSocketToNetAddress((sockaddr_in *)&sa, &from);
       else if (sa.ss_family == AF_INET6)
-         IPSocket6ToNetAddress((sockaddr_in6 *)&sa, &receiveEvent.sourceAddress);
+         IPSocket6ToNetAddress((sockaddr_in6 *)&sa, &from);
       else
          continue;
       
       if (bytesRead <= 0)
          continue;
       
-      if (receiveEvent.sourceAddress.type == NetAddress::IPAddress &&
-          receiveEvent.sourceAddress.address.ipv4.netNum[0] == 127 &&
-          receiveEvent.sourceAddress.address.ipv4.netNum[1] == 0 &&
-          receiveEvent.sourceAddress.address.ipv4.netNum[2] == 0 &&
-          receiveEvent.sourceAddress.address.ipv4.netNum[3] == 1 &&
-          receiveEvent.sourceAddress.port == PlatformNetState::netPort)
+      if (from.type == NetAddress::IPAddress &&
+          from.address.ipv4.netNum[0] == 127 &&
+          from.address.ipv4.netNum[1] == 0 &&
+          from.address.ipv4.netNum[2] == 0 &&
+          from.address.ipv4.netNum[3] == 1 &&
+          from.port == PlatformNetState::netPort)
          continue;
       
-      receiveEvent.size = PacketReceiveEventHeaderSize + bytesRead;
-      Game->postEvent(receiveEvent);
+      if (gPacketReceiveCB)
+      {
+         gPacketReceiveCB(from, recvBuf, bytesRead);
+      }
    }
-   #endif
 }
 
 NetSocket Net::openSocket()
@@ -1550,7 +1509,7 @@ Net::Error Net::bindAddress(const NetAddress &address, NetSocket handleFd, bool 
    int error = 0;
    sockaddr_storage socketAddress;
    
-   dMemset(&socketAddress, '\0', sizeof(socketAddress));
+   memset(&socketAddress, '\0', sizeof(socketAddress));
    
    SOCKET socketFd = PlatformNetState::smReservedSocketList.resolve(handleFd);
    if (socketFd == InvalidSocketHandle)
@@ -1621,7 +1580,7 @@ Net::Error Net::getListenAddress(const NetAddress::Type type, NetAddress *addres
 {
    if (type == NetAddress::IPAddress)
    {
-      const char* serverIP = forceDefaults ? NULL : Con::getVariable("pref::Net::BindAddress");
+      const char* serverIP = forceDefaults ? nullptr : Con::getVariable("pref::Net::BindAddress");
       if (!serverIP || serverIP[0] == '\0')
       {
          address->type = type;
@@ -1643,11 +1602,11 @@ Net::Error Net::getListenAddress(const NetAddress::Type type, NetAddress *addres
    }
    else if (type == NetAddress::IPV6Address)
    {
-      const char* serverIP6 = forceDefaults ? NULL : Con::getVariable("pref::Net::BindAddress6");
+      const char* serverIP6 = forceDefaults ? nullptr : Con::getVariable("pref::Net::BindAddress6");
       if (!serverIP6 || serverIP6[0] == '\0')
       {
          sockaddr_in6 addr;
-         dMemset(&addr, '\0', sizeof(addr));
+         memset(&addr, '\0', sizeof(addr));
          
          addr.sin6_port = 0;
          addr.sin6_addr = in6addr_any;
@@ -1662,7 +1621,7 @@ Net::Error Net::getListenAddress(const NetAddress::Type type, NetAddress *addres
    }
    else if (type == NetAddress::IPV6MulticastAddress)
    {
-      const char* multicastAddressValue = forceDefaults ? NULL : Con::getVariable("pref::Net::Multicast6Address");
+      const char* multicastAddressValue = forceDefaults ? nullptr : Con::getVariable("pref::Net::Multicast6Address");
       if (!multicastAddressValue || multicastAddressValue[0] == '\0')
       {
          multicastAddressValue = TORQUE_NET_DEFAULT_MULTICAST_ADDRESS;
@@ -1678,7 +1637,7 @@ Net::Error Net::getListenAddress(const NetAddress::Type type, NetAddress *addres
 
 void Net::getIdealListenAddress(NetAddress *address)
 {
-   dMemset(address, '\0', sizeof(NetAddress));
+   memset(address, '\0', sizeof(NetAddress));
    
    if (Net::smIpv6Enabled)
    {
@@ -1775,7 +1734,7 @@ Net::Error Net::stringToAddress(const char *addressString, NetAddress  *address,
    }
    
    addressString = addr;
-   dMemset(address, '\0', sizeof(NetAddress));
+   memset(address, '\0', sizeof(NetAddress));
    
    if (!dStricmp(addressString, "broadcast"))
    {
@@ -1806,10 +1765,10 @@ Net::Error Net::stringToAddress(const char *addressString, NetAddress  *address,
       sockaddr_in ipAddr;
       sockaddr_in6 ipAddr6;
       
-      dMemset(&ipAddr, 0, sizeof(ipAddr));
-      dMemset(&ipAddr6, 0, sizeof(ipAddr6));
+      memset(&ipAddr, 0, sizeof(ipAddr));
+      memset(&ipAddr6, 0, sizeof(ipAddr6));
       
-      bool hasInterface = dStrchr(addressString, '%') != NULL; // if we have an interface, best use getaddrinfo to parse
+      bool hasInterface = dStrchr(addressString, '%') != nullptr; // if we have an interface, best use getaddrinfo to parse
       
       // Check if we've got a simple ipv4 / ipv6
       
@@ -1846,12 +1805,12 @@ Net::Error Net::stringToAddress(const char *addressString, NetAddress  *address,
          if (!hostLookup && !hasInterface)
             return NeedHostLookup;
          
-         struct addrinfo hint, *res = NULL;
-         dMemset(&hint, 0, sizeof(hint));
+         struct addrinfo hint, *res = nullptr;
+         memset(&hint, 0, sizeof(hint));
          hint.ai_family = NetAddressTypeToIpType(actualType);
          hint.ai_flags = hostLookup ? 0 : AI_NUMERICHOST;
          
-         if (getaddrinfo(addressString, NULL, &hint, &res) == 0)
+         if (getaddrinfo(addressString, nullptr, &hint, &res) == 0)
          {
             if (hint.ai_family != AF_UNSPEC)
             {
@@ -1979,9 +1938,9 @@ void Net::enableMulticast()
          
          if (error == NoError)
          {
-            dMemset(&PlatformNetState::multicast6Group, '\0', sizeof(&PlatformNetState::multicast6Group));
+            memset(&PlatformNetState::multicast6Group, '\0', sizeof(&PlatformNetState::multicast6Group));
             NetAddressToIPSocket6(&multicastAddress, &multicastSocketAddress);
-            dMemcpy(&PlatformNetState::multicast6Group.ipv6mr_multiaddr, &multicastSocketAddress.sin6_addr, sizeof(PlatformNetState::multicast6Group.ipv6mr_multiaddr));
+            memcpy(&PlatformNetState::multicast6Group.ipv6mr_multiaddr, &multicastSocketAddress.sin6_addr, sizeof(PlatformNetState::multicast6Group.ipv6mr_multiaddr));
          }
          
          // Setup group
@@ -2083,6 +2042,26 @@ bool Net::isAddressTypeAvailable(NetAddress::Type addressType)
    }
 }
 
+// Setters
+void Net::setPacketReceiveCallback(PacketReceiveCallback cb)
+{
+   gPacketReceiveCB = std::move(cb);
+}
+
+void Net::setConnectedNotifyCallback(ConnectedNotifyCallback cb)
+{
+   gConnectedNotifyCB = std::move(cb);
+}
+
+void Net::setConnectedAcceptCallback(ConnectedAcceptCallback cb)
+{
+   gConnectedAcceptCB = std::move(cb);
+}
+
+void Net::setConnectedReceiveCallback(ConnectedReceiveCallback cb)
+{
+   gConnectedReceiveCB = std::move(cb);
+}
 
 
 
@@ -2313,7 +2292,7 @@ bool Net::openPort(S32 port, bool doBind)
    {
 
       // Alloc new socket
-      PlatformStubSocket* socketPtr = NULL;
+      PlatformStubSocket* socketPtr = nullptr;
       printf("SocketPool::allocItem\n");
       FreeListHandle::Basic32 ret = PlatformNetState::smSocketPool.allocItem(&socketPtr);
       printf("SocketPool::allocItem DONE\n");
@@ -2374,10 +2353,10 @@ Net::Error Net::sendto(const NetAddress *address, const U8 *buffer, S32 bufferSi
       return socket.mAllocNumber != 0 && socket.mAddress.isEqual(*address);
    });
    
-   PlatformStubSocket* outSocket = itr != PlatformNetState::smSocketPool.mItems.end() ? itr : NULL;
+   PlatformStubSocket* outSocket = itr != PlatformNetState::smSocketPool.mItems.end() ? itr : nullptr;
    PlatformStubSocket* serverSocket = PlatformNetState::smSocketPool.getItem(PlatformNetState::udpSocket.getHandle());
 
-   if (outSocket == NULL || serverSocket == NULL)
+   if (outSocket == nullptr || serverSocket == nullptr)
       return NoError;
 
    // Send packet to inbox of socket
@@ -2394,16 +2373,16 @@ void Net::process()
 
 void Net::processListenSocket(NetSocket socketHandle)
 {
-   #if TOFIX
    if (socketHandle == NetSocket::INVALID)
       return;
-   PacketReceiveEvent receiveEvent;
+   U8 recvBuf[MaxPacketDataSize];
+   NetAddress from;
 
    for (;;)
    {
       // We store the packet header in the ring buffer in this case
       PlatformStubSocket* inSocket = PlatformNetState::smSocketPool.getItem(socketHandle.getHandle());
-      if (inSocket == NULL)
+      if (inSocket == nullptr)
          continue;
 
       U16 bytesRead = 0;
@@ -2413,18 +2392,19 @@ void Net::processListenSocket(NetSocket socketHandle)
       if (bytesRead == 0)
          break;
       
-      if (receiveEvent.sourceAddress.type == NetAddress::IPAddress &&
-          receiveEvent.sourceAddress.address.ipv4.netNum[0] == 127 &&
-          receiveEvent.sourceAddress.address.ipv4.netNum[1] == 0 &&
-          receiveEvent.sourceAddress.address.ipv4.netNum[2] == 0 &&
-          receiveEvent.sourceAddress.address.ipv4.netNum[3] == 1 &&
-          receiveEvent.sourceAddress.port == PlatformNetState::netPort)
+      if (from.type == NetAddress::IPAddress &&
+          from.address.ipv4.netNum[0] == 127 &&
+          from.address.ipv4.netNum[1] == 0 &&
+          from.address.ipv4.netNum[2] == 0 &&
+          from.address.ipv4.netNum[3] == 1 &&
+          from.port == PlatformNetState::netPort)
          continue;
-      
-      receiveEvent.size = PacketReceiveEventHeaderSize + bytesRead;
-      Game->postEvent(receiveEvent);
+         
+      if (gPacketReceiveCB)
+      {
+         gPacketReceiveCB(from, recvBuf, bytesRead);
+      }
    }
-   #endif
 }
 
 // TCP socket handler; not needed
@@ -2450,7 +2430,7 @@ Net::Error Net::listen(NetSocket handleFd, S32 backlog)
 {
    // Grab socket
    PlatformStubSocket* inSocket = PlatformNetState::smSocketPool.getItem(handleFd.getHandle());
-   if (inSocket == NULL)
+   if (inSocket == nullptr)
       return NotASocket;
 
    // All stub sockets listen by default
@@ -2468,7 +2448,7 @@ Net::Error Net::bindAddress(const NetAddress &address, NetSocket handleFd, bool 
 {
    // Grab socket
    PlatformStubSocket* inSocket = PlatformNetState::smSocketPool.getItem(handleFd.getHandle());
-   if (inSocket == NULL)
+   if (inSocket == nullptr)
       return NotASocket;
 
    // See if address is free
@@ -2508,7 +2488,7 @@ Net::Error Net::getListenAddress(const NetAddress::Type type, NetAddress *addres
 {
    if (type == NetAddress::IPAddress)
    {
-      const char* serverIP = forceDefaults ? NULL : Con::getVariable("pref::Net::BindAddress");
+      const char* serverIP = forceDefaults ? nullptr : Con::getVariable("pref::Net::BindAddress");
       if (!serverIP || serverIP[0] == '\0')
       {
          address->type = type;
@@ -2529,7 +2509,7 @@ Net::Error Net::getListenAddress(const NetAddress::Type type, NetAddress *addres
 
 void Net::getIdealListenAddress(NetAddress *address)
 {
-   dMemset(address, '\0', sizeof(NetAddress));
+   memset(address, '\0', sizeof(NetAddress));
    if (Net::getListenAddress(NetAddress::IPAddress, address) == NeedHostLookup)
    {
       Net::getListenAddress(NetAddress::IPAddress, address, true);
@@ -2575,7 +2555,7 @@ Net::Error Net::stringToAddress(const char *addressString, NetAddress  *address,
    }
    
    addressString = addr;
-   dMemset(address, '\0', sizeof(NetAddress));
+   memset(address, '\0', sizeof(NetAddress));
    
    if (!dStricmp(addressString, "broadcast"))
    {

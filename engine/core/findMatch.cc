@@ -21,7 +21,10 @@
 //-----------------------------------------------------------------------------
 
 #include "platform/platform.h"
+#include "embed/api.h"
+#include "embed/internalApi.h"
 #include "core/findMatch.h"
+#include <array>
 
 //--------------------------------------------------------------------------------
 // NAME
@@ -43,18 +46,12 @@
 
 FindMatch::FindMatch( U32 _maxMatches )
 {
-   VECTOR_SET_ASSOCIATION(matchList);
-   
-   expression = NULL;
    maxMatches = _maxMatches;
    matchList.reserve( maxMatches );
 }
 
 FindMatch::FindMatch( const char *_expression, U32 _maxMatches )
 {
-   VECTOR_SET_ASSOCIATION(matchList);
-   
-   expression = NULL;
    setExpression( _expression );
    maxMatches = _maxMatches;
    matchList.reserve( maxMatches );
@@ -62,17 +59,15 @@ FindMatch::FindMatch( const char *_expression, U32 _maxMatches )
 
 FindMatch::~FindMatch()
 {
-   delete [] expression;
    matchList.clear();
 }
 
 void FindMatch::setExpression( const char *_expression )
 {
-   delete [] expression;
-   
-   expression = new char[dStrlen(_expression) + 1];
-   dStrcpy(expression, _expression);
-   dStrupr(expression);
+   size_t len = strlen(_expression);
+   expression.resize(len+1);
+   memcpy(expression.data(), _expression, len+1);
+   std::transform(expression.begin(), expression.begin()+len+1, expression.begin(), dToupper);
 }
 
 bool FindMatch::findMatch( const char *str, bool caseSensitive )
@@ -80,10 +75,16 @@ bool FindMatch::findMatch( const char *str, bool caseSensitive )
    if ( isFull() )
       return false;
    
-   char nstr[512];
-   dStrcpy( nstr,str );
-   dStrupr(nstr);
-   if ( isMatch( expression, nstr, caseSensitive ) )
+   std::array<char, 512> nstr;
+   size_t len = strlen(str);
+   if (len > 511)
+   {
+      len = 511;
+   }
+   memcpy( nstr.data(), str, len );
+   std::transform(nstr.begin(), nstr.begin()+len+1, nstr.begin(), dToupper);
+
+   if ( isMatch( expression.data(), nstr.data(), caseSensitive ) )
    {
       matchList.push_back( (char*)str );
       return true;
@@ -104,8 +105,8 @@ bool FindMatch::isMatch( const char *exp, const char *str, bool caseSensitive )
          return false;
    }
 
-   const char* cp = NULL;
-   const char* mp = NULL;
+   const char* cp = nullptr;
+   const char* mp = nullptr;
 
    while ( *str )
    {
@@ -139,24 +140,24 @@ bool FindMatch::isMatch( const char *exp, const char *str, bool caseSensitive )
 bool FindMatch::isMatchMultipleExprs( const char *exps, const char *str, bool caseSensitive )
 {
    char *tok = 0;
-   S32 len = dStrlen(exps);
+   S32 len = strlen(exps);
 
-   char *e = new char[len+1];
-   strncpy(e,exps,len+1);
+   KorkApi::Vector<char> e;
+   e.resize(len+1);
+   memcpy(e.data(), exps, len+1);
 
    // [tom, 12/18/2006] This no longer supports space separated expressions as
    // they don't work when the paths have spaces in.
 
    // search for each expression. return true soon as we see one.
-   for( tok = dStrtok(e,"\t"); tok != NULL; tok = dStrtok(NULL,"\t"))
+   for( tok = strtok(e.data(),"\t"); tok != nullptr; tok = strtok(nullptr,"\t"))
    {
       if( isMatch( tok, str, caseSensitive) )
       {
-         delete []e;
          return true;
       }
    }
 
-   delete []e;
    return false;
 }
+

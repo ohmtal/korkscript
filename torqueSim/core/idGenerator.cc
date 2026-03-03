@@ -1,5 +1,5 @@
 //-----------------------------------------------------------------------------
-// Copyright (c) 2013 GarageGames, LLC
+// Copyright (c) 2012 GarageGames, LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to
@@ -20,9 +20,17 @@
 // IN THE SOFTWARE.
 //-----------------------------------------------------------------------------
 
-#ifndef _PLATFORMSEMAPHORE_H_
-#define _PLATFORMSEMAPHORE_H_
+#include "core/idGenerator.h"
 
-#include "platform/threads/semaphore.h"
+void IdGenerator::reclaim()
+{
+   // attempt to keep the pool vector as small as possible by reclaiming
+   // pool entries back into the nextIdBlock variable
 
-#endif
+   while (!mPool.empty() && (mPool.back() == (mNextId-1)) )
+   {
+      mNextId--;
+      mPool.pop_back();
+   }
+}
+

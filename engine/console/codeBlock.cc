@@ -1,4 +1,11 @@
 //-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
 // Copyright (c) 2013 GarageGames, LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -22,7 +29,6 @@
 
 #include "embed/api.h"
 #include "embed/internalApi.h"
-#include "console/simpleLexer.h"
 #include "console/ast.h"
 #include "console/consoleNamespace.h"
 
@@ -32,9 +38,6 @@
 #include "console/telnetDebugger.h"
 
 #include "core/stream.h"
-#include "core/fileStream.h"
-#include "core/stringTable.h"
-#include "core/unicode.h"
 
 using namespace Compiler;
 
@@ -42,30 +45,37 @@ using namespace Compiler;
 
 CodeBlock::CodeBlock(KorkApi::VmInternal* vm, bool _isExecBlock)
 {
-   globalStrings = NULL;
-   functionStrings = NULL;
+   globalStrings = nullptr;
+   functionStrings = nullptr;
    functionStringsMaxLen = 0;
    globalStringsMaxLen = 0;
    numGlobalFloats = 0;
    numFunctionFloats = 0;
-   globalFloats = NULL;
-   functionFloats = NULL;
-   lineBreakPairs = NULL;
-   breakList = NULL;
+   globalFloats = nullptr;
+   functionFloats = nullptr;
+   lineBreakPairs = nullptr;
+   breakList = nullptr;
    breakListSize = 0;
    
-   identStrings = NULL;
-   identStringOffsets = NULL;
+   identStrings = nullptr;
+   identStringOffsets = nullptr;
+   numFunctionCalls = 0;
+   functionCalls = nullptr;
    numIdentStrings = 0;
+   startTypeStrings = 0;
+   numTypeStrings = 0;
+   typeStringMap = nullptr;
+
    isExecBlock = _isExecBlock;
    inList = false;
+   didFlushFunctions = false;
    
    refCount = 0;
-   code = NULL;
-   name = NULL;
-   fullPath = NULL;
-   modPath = NULL;
-   mRoot = StringTable->EmptyString;
+   code = nullptr;
+   name = nullptr;
+   fullPath = nullptr;
+   modPath = nullptr;
+   mRoot = vm->internString("", false);
    mVM = vm;
    mVMPublic = vm->mVM;
 }
@@ -77,17 +87,26 @@ CodeBlock::~CodeBlock()
 
    removeFromCodeList();
 
-   delete[] const_cast<char*>(globalStrings);
-   delete[] const_cast<char*>(functionStrings);
-   delete[] globalFloats;
-   delete[] functionFloats;
-   delete[] code;
-   delete[] breakList;
+   if (mVM == nullptr)
+   {
+      return;
+   }
+
+   mVM->DeleteArray(const_cast<char*>(globalStrings));
+   mVM->DeleteArray(const_cast<char*>(functionStrings));
+   mVM->DeleteArray(globalFloats);
+   mVM->DeleteArray(functionFloats);
+   mVM->DeleteArray(code);
+   mVM->DeleteArray(breakList);
    
+   if (functionCalls)
+      mVM->DeleteArray(functionCalls);
    if (identStrings)
-      delete[] identStrings;
+      mVM->DeleteArray(identStrings);
    if (identStringOffsets)
-      delete[] identStringOffsets;
+      mVM->DeleteArray(identStringOffsets);
+   if (typeStringMap)
+      mVM->DeleteArray(typeStringMap);
 }
 
 //-------------------------------------------------------------------------
@@ -245,10 +264,11 @@ void CodeBlock::findBreakLine(U32 ip, U32 &line, U32 &instruction)
 const char *CodeBlock::getFileLine(U32 ip)
 {
    char* nameBuffer = mVM->mFileLineBuffer;
-   U32 line, inst;
+   U32 line=0;
+   U32 inst=0;
    findBreakLine(ip, line, inst);
    
-   dSprintf(nameBuffer, KorkApi::VmInternal::FileLineBufferSize, "%s (%d)", name ? name : "<input>", line);
+   snprintf(nameBuffer, KorkApi::VmInternal::FileLineBufferSize, "%s (%d)", name ? name : "<input>", line);
    return nameBuffer;
 }
 
@@ -311,7 +331,7 @@ void CodeBlock::calcBreakList()
    if(seqCount)
       size++;
    
-   breakList = new U32[size];
+   breakList = mVM->NewArray<U32>(size);
    breakListSize = size;
    line = -1;
    seqCount = 0;
@@ -350,53 +370,81 @@ void CodeBlock::calcBreakList()
       mVM->mTelDebugger->addAllBreakpoints( this );
 }
 
-bool CodeBlock::read(StringTableEntry fileName, bool readVersion, Stream &st)
+void* CodeBlock::getNSEntry(U32 index)
 {
-   const StringTableEntry exePath = Platform::getMainDotCsDir();
-   const StringTableEntry cwd = Platform::getCurrentDirectory();
+   return functionCalls && index < numFunctionCalls ? functionCalls[index] : nullptr;
+}
 
-   if (readVersion)
+void CodeBlock::setNSEntry(U32 index, void* entry)
+{
+   if (functionCalls && index < numFunctionCalls)
    {
-      U32 version = 0;
-      st.read(&version);
-      if (version != KorkApi::DSOVersion)
+      didFlushFunctions = false;
+      functionCalls[index] = entry;
+   }
+}
+
+void CodeBlock::flushNSEntries()
+{
+   if (didFlushFunctions)
+   {
+      return;
+   }
+   
+   memset(functionCalls, '\0', sizeof(void*) * numFunctionCalls);
+   didFlushFunctions = true;
+}
+
+bool CodeBlock::read(StringTableEntry fileName, StringTableEntry inModPath, Stream &st, U32 readVersion)
+{
+   if (readVersion == 0)
+   {
+      st.read(&readVersion);
+
+      if (readVersion != KorkApi::DSOVersion)
       {
          return false;
       }
    }
-   
-   name = fileName;
-   
-   if(fileName && fileName[0])
+
+   if (readVersion < KorkApi::MinDSOVersion || readVersion > KorkApi::MaxDSOVersion)
    {
-      fullPath = NULL;
+      return false;
+   }
+   
+   if(fileName)
+   {
+      // Important things here are:
+      // fullPath should be the fileName
+      // name should be file name
+      // modPath should be mod path
       
-      if(Platform::isFullPath(fileName))
-         fullPath = fileName;
-      
-      if(dStrnicmp(exePath, fileName, dStrlen(exePath)) == 0)
-         name = StringTable->insert(fileName + dStrlen(exePath) + 1, true);
-      else if(dStrnicmp(cwd, fileName, dStrlen(cwd)) == 0)
-         name = StringTable->insert(fileName + dStrlen(cwd) + 1, true);
-      
-      if(fullPath == NULL)
+      fullPath = fileName;
+      modPath = inModPath ? inModPath : mVM->internString("", false);
+      name = strrchr(fullPath, '/');
+      if (name == nullptr)
       {
-         char buf[1024];
-         fullPath = StringTable->insert(Platform::makeFullPathName(fileName, buf, sizeof(buf)), true);
+         name = fileName;
       }
-      
-      modPath = "";// TOFIX Con::getModNameFromPath(fileName);
+      else
+      {
+         name = mVM->internString(name, false);
+      }
+   }
+   else
+   {
+      modPath = fullPath = name = mVM->internString("", false);
    }
    
    //
    if (name)
    {
-      if (const char *slash = dStrchr(this->name, '/'))
+      if (const char *slash = strchr(this->name, '/'))
       {
          char root[512];
-         dStrncpy(root, this->name, slash-this->name);
+         strncpy(root, this->name, slash-this->name);
          root[slash-this->name] = 0;
-         mRoot = StringTable->insert(root);
+         mRoot = mVM->internString(root, false);
       }
    }
    
@@ -410,21 +458,21 @@ bool CodeBlock::read(StringTableEntry fileName, bool readVersion, Stream &st)
    st.read(&size);
    if(size)
    {
-      globalStrings = new char[size];
+      globalStrings = mVM->NewArray<char>(size);
       globalStringsMaxLen = size;
       st.read(size, globalStrings);
    }
    st.read(&size);
    if(size)
    {
-      functionStrings = new char[size];
+      functionStrings = mVM->NewArray<char>(size);
       functionStringsMaxLen = size;
       st.read(size, functionStrings);
    }
    st.read(&size);
    if(size)
    {
-      globalFloats = new F64[size];
+      globalFloats = mVM->NewArray<F64>(size);
       numGlobalFloats = size;
       for(U32 i = 0; i < size; i++)
          st.read(&globalFloats[i]);
@@ -432,7 +480,7 @@ bool CodeBlock::read(StringTableEntry fileName, bool readVersion, Stream &st)
    st.read(&size);
    if(size)
    {
-      functionFloats = new F64[size];
+      functionFloats = mVM->NewArray<F64>(size);
       numFunctionFloats = size;
       for(U32 i = 0; i < size; i++)
          st.read(&functionFloats[i]);
@@ -443,7 +491,7 @@ bool CodeBlock::read(StringTableEntry fileName, bool readVersion, Stream &st)
    st.read(&lineBreakPairCount);
    
    U32 totSize = codeSize + lineBreakPairCount * 2;
-   code = new U32[totSize];
+   code = mVM->NewArray<U32>(totSize);
    
    for(i = 0; i < codeSize; i++)
    {
@@ -465,9 +513,9 @@ bool CodeBlock::read(StringTableEntry fileName, bool readVersion, Stream &st)
    st.read(&identCount);
    numIdentStrings = identCount;
    
-   identStringOffsets = new U32[identCount];
-   identStrings = new StringTableEntry[identCount];
-   
+   identStringOffsets = mVM->NewArray<U32>(identCount);
+   identStrings = mVM->NewArray<StringTableEntry>(identCount);
+
    i = 0;
    while(identCount--)
    {
@@ -475,31 +523,95 @@ bool CodeBlock::read(StringTableEntry fileName, bool readVersion, Stream &st)
       st.read(&offset);
       StringTableEntry ste;
       if(offset < globalStringsMaxLen)
-         ste = StringTable->insert(globalStrings + offset);
+         ste = mVM->internString(globalStrings + offset, false);
       else
-         ste = StringTable->EmptyString;
+         ste = mVM->internString("", false);
       
       identStrings[i] = ste;
       identStringOffsets[i] = offset;
       
-      U32 count;
+      U32 count=0;
       st.read(&count);
       while(count--)
       {
          U32 ip;
          st.read(&ip);
-         // NOTE: this technically should no longer be needed
-         // for new codeblocks.
-         code[ip] = i;
+
+         if (readVersion < 77)
+         {
+            // NOTE: this technically should no longer be needed
+            // for new codeblocks.
+            // 0 is treated as NULL
+            code[ip] = i+1;
+         }
       }
       
       i++;
    }
+
+   startTypeStrings = 0;
+   numTypeStrings = 0;
+   typeStringMap = nullptr;
+
+   if (readVersion > 77)
+   {
+      st.read(&numFunctionCalls);
+      st.read(&startTypeStrings);
+      st.read(&numTypeStrings);
+      typeStringMap = mVM->NewArray<S32>(numTypeStrings);
+      for (U32 i=0; i<numTypeStrings; i++)
+      {
+         typeStringMap[i] = -1;
+      }
+      
+      if (numFunctionCalls == 0)
+      {
+         numFunctionCalls = 1;
+      }
+   }
+   else
+   {
+      numFunctionCalls = 1;
+   }
+   
+   // Alloc memory for func call ptrs
+   functionCalls = mVM->NewArray<void*>(numFunctionCalls);
+   memset(functionCalls, '\0', sizeof(void*) * numFunctionCalls);
    
    if(lineBreakPairCount)
       calcBreakList();
    
+   linkTypes();
+   
    return true;
+}
+
+bool CodeBlock::linkTypes()
+{
+   for (U32 i=0; i<numTypeStrings; i++)
+   {
+      typeStringMap[i] = mVM->lookupTypeId(identStrings[startTypeStrings + i]);
+      if (typeStringMap[i] == -1)
+      {
+         mVM->printf(0, "Type %s used in script is undefined", identStrings[startTypeStrings + i]);
+         return false;
+      }
+   }
+   return true;
+}
+
+StringTableEntry CodeBlock::getTypeName(U32 typeID)
+{
+   if (typeID < numTypeStrings)
+   {
+      return identStrings[startTypeStrings + typeID];
+   }
+   return nullptr;
+}
+
+U32 CodeBlock::getRealTypeID(U32 typeID)
+{
+   return typeID < numTypeStrings ? typeStringMap[typeID] : 0;
 }
 
 bool CodeBlock::write(Stream &st)
@@ -592,50 +704,43 @@ bool CodeBlock::write(Stream &st)
       st.write((U32)0);
    }
    
-   return true;
-}
-
-
-bool CodeBlock::compile(const char *codeFileName, StringTableEntry fileName, const char *inScript)
-{
-   FileStream st;
-   if(!st.open(codeFileName, FileStream::Write))
-      return false;
+   st.write(numFunctionCalls);
+   st.write(startTypeStrings);
+   st.write(numTypeStrings);
    
-   return compileToStream(st, fileName, inScript);
+   return true;
 }
 
 bool CodeBlock::compileToStream(Stream &st, StringTableEntry fileName, const char *inScript)
 {
-   // Check for a UTF8 script file
-   char *script;
-   chompUTF8BOM( inScript, &script );
-   
    mVM->mCompilerResources->syntaxError = false;
    
    mVM->mCompilerResources->consoleAllocReset();
    
    mVM->mCompilerResources->STEtoCode = &Compiler::compileSTEtoCode;
    
-   StmtNode* rootNode = NULL;
+   StmtNode* rootNode = nullptr;
    
-   SimpleLexer::Tokenizer lex(StringTable, inScript, fileName);
-   SimpleParser::ASTGen astGen(&lex, mVM->mCompilerResources);
+   SimpleLexer::Tokenizer<KorkApi::VMStringTable> lex(KorkApi::VMStringTable(mVM), inScript, fileName, mVM->mCompilerResources->allowStringInterpolation);
+   SimpleParser::ASTGen<KorkApi::VMStringTable> astGen(&lex, mVM->mCompilerResources);
+   
+   // Reset all our value tables...
+   mVM->mCompilerResources->resetTables();
    
    try
    {
-      astGen.processTokens();
-      rootNode = astGen.parseProgram();
+      if (!astGen.processTokens())
+      {
+         mVM->printf(0, "Invalid token (%s) at %i:%i", lex.toString(astGen.mErrorToken).c_str(), astGen.mErrorToken.pos.line, astGen.mErrorToken.pos.col);
+      }
+      else
+      {
+         rootNode = astGen.parseProgram();
+      }
    }
    catch (SimpleParser::TokenError& e)
    {
-      mVM->printf(0, "Error parsing (%s :: %s)", e.what(), lex.toString(e.token()).c_str());
-   }
-   
-   if(!rootNode)
-   {
-      delete this;
-      return "";
+      mVM->printf(0, "Error parsing (\"%s\"; token is %s) at %i:%i", e.what(), lex.toString(e.token()).c_str(), e.token().pos.line, e.token().pos.col);
    }
    
    if(!rootNode)
@@ -643,9 +748,6 @@ bool CodeBlock::compileToStream(Stream &st, StringTableEntry fileName, const cha
       mVM->mCompilerResources->consoleAllocReset();
       return false;
    }
-   
-   // Reset all our value tables...
-   mVM->mCompilerResources->resetTables();
    
    CodeStream codeStream(mVM->mCompilerResources);
    codeStream.setFilename(fileName);
@@ -661,7 +763,7 @@ bool CodeBlock::compileToStream(Stream &st, StringTableEntry fileName, const cha
    }
    
    codeStream.emit(OP_RETURN);
-   codeStream.emitCodeStream(&codeSize, &code, &lineBreakPairs);
+   codeStream.emitCodeStream(&codeSize, &code, &lineBreakPairs, &numFunctionCalls, &functionCalls);
    
    lineBreakPairCount = codeStream.getNumLineBreaks();
    
@@ -701,46 +803,59 @@ bool CodeBlock::compileToStream(Stream &st, StringTableEntry fileName, const cha
    for(i = codeSize; i < totSize; i++)
       st.write(code[i]);
    
-   mVM->mCompilerResources->getIdentTable().write(st);
+   Compiler::CompilerIdentTable& mainTable = mVM->mCompilerResources->getIdentTable();
+   Compiler::CompilerIdentTable& typeTable = mVM->mCompilerResources->getTypeTable();
+
+   startTypeStrings = mainTable.numIdentStrings;
+   numTypeStrings = typeTable.numIdentStrings;
+
+   mainTable.append(typeTable);
+   mainTable.write(st);
+   
+   typeStringMap = mVM->NewArray<S32>(numTypeStrings);
+   for (U32 i=0; i<numTypeStrings; i++)
+   {
+      typeStringMap[i] = -1;
+   }
+
+   // Write offsets
+   
+   st.write(numFunctionCalls);
+   st.write(startTypeStrings);
+   st.write(numTypeStrings);
    
    mVM->mCompilerResources->consoleAllocReset();
    
    return true;
 }
 
- KorkApi::ConsoleValue CodeBlock::compileExec(StringTableEntry fileName, const char *inString, bool noCalls, bool isNativeFrame, int setFrame)
+ KorkApi::ConsoleValue CodeBlock::compileExec(StringTableEntry fileName, StringTableEntry inModPath, const char *inString, bool noCalls, bool isNativeFrame, int setFrame)
 {
-   // Check for a UTF8 script file
-   char *string;
-   chompUTF8BOM( inString, &string );
-
    mVM->mCompilerResources->STEtoCode = &Compiler::compileSTEtoCode;
    mVM->mCompilerResources->consoleAllocReset();
    
-   name = fileName;
-   
    if(fileName)
    {
-      const StringTableEntry exePath = Platform::getMainDotCsDir();
-      const StringTableEntry cwd = Platform::getCurrentDirectory();
+      // Important things here are:
+      // fullPath should be the fileName
+      // name should be file name
+      // modPath should be mod path
       
-      fullPath = NULL;
-      
-      if(Platform::isFullPath(fileName))
-         fullPath = fileName;
-      
-      if(exePath && dStrnicmp(exePath, fileName, dStrlen(exePath)) == 0)
-         name = StringTable->insert(fileName + dStrlen(exePath) + 1, true);
-      else if(cwd && dStrnicmp(cwd, fileName, dStrlen(cwd)) == 0)
-         name = StringTable->insert(fileName + dStrlen(cwd) + 1, true);
-      
-      if(fullPath == NULL)
+      fullPath = fileName;
+      modPath = inModPath ? inModPath : mVM->internString("", false);
+      name = strrchr(fullPath, '/');
+      if (name == nullptr)
       {
-         char buf[1024];
-         fullPath = StringTable->insert(Platform::makeFullPathName(fileName, buf, sizeof(buf)), true);
+         name = fileName;
       }
-      
-      modPath = ""; // TOFIX Con::getModNameFromPath(fileName);
+      else
+      {
+         name = mVM->internString(name, false);
+      }
+   }
+   else
+   {
+      modPath = fullPath = name = mVM->internString("", false);
    }
    
    if (isExecBlock || (name && name[0]))
@@ -748,28 +863,35 @@ bool CodeBlock::compileToStream(Stream &st, StringTableEntry fileName, const cha
       addToCodeList();
    }
    
-   StmtNode* rootNode = NULL;
+   StmtNode* rootNode = nullptr;
    
-   SimpleLexer::Tokenizer lex(StringTable, inString, fileName ? fileName : "");
-   SimpleParser::ASTGen astGen(&lex, mVM->mCompilerResources);
+   SimpleLexer::Tokenizer<KorkApi::VMStringTable> lex(KorkApi::VMStringTable(mVM), inString, fileName ? fileName : "", mVM->mCompilerResources->allowStringInterpolation);
+   SimpleParser::ASTGen<KorkApi::VMStringTable> astGen(&lex, mVM->mCompilerResources);
+    
+    // Need to do this here as ast node gen stores stuff in tables
+    mVM->mCompilerResources->resetTables();
    
    try
    {
-      astGen.processTokens();
-      rootNode = astGen.parseProgram();
+      if (!astGen.processTokens())
+      {
+         mVM->printf(0, "Invalid token (%s) at %i:%i", lex.toString(astGen.mErrorToken).c_str(), astGen.mErrorToken.pos.line, astGen.mErrorToken.pos.col);
+      }
+      else
+      {
+         rootNode = astGen.parseProgram();
+      }
    }
    catch (SimpleParser::TokenError& e)
    {
-      mVM->printf(0, "Error parsing (%s :: %s)", e.what(), lex.toString(e.token()).c_str());
+      mVM->printf(0, "Error parsing (\"%s\"; token is %s) at %i:%i", e.what(), lex.toString(e.token()).c_str(), e.token().pos.line, e.token().pos.col);
    }
    
    if(!rootNode)
    {
-      delete this;
+      mVM->Delete(this);
       return KorkApi::ConsoleValue();
    }
-   
-   mVM->mCompilerResources->resetTables();
    
    CodeStream codeStream(mVM->mCompilerResources);
    codeStream.setFilename(fileName);
@@ -788,22 +910,42 @@ bool CodeBlock::compileToStream(Stream &st, StringTableEntry fileName, const cha
     numGlobalFloats = mVM->mCompilerResources->getGlobalFloatTable().count;
     numFunctionFloats = mVM->mCompilerResources->getFunctionFloatTable().count;
     
-    mVM->mCompilerResources->getIdentTable().build(&identStrings, &identStringOffsets, &numIdentStrings);
+    // Combine ident with type table and set offsets
+   Compiler::CompilerIdentTable& mainTable = mVM->mCompilerResources->getIdentTable();
+   Compiler::CompilerIdentTable& typeTable = mVM->mCompilerResources->getTypeTable();
+
+   startTypeStrings = mainTable.numIdentStrings;
+   numTypeStrings = typeTable.numIdentStrings;
+    
+   typeStringMap = mVM->NewArray<S32>(numTypeStrings);
+   for (U32 i=0; i<numTypeStrings; i++)
+   {
+      typeStringMap[i] = -1;
+   }
+
+   mainTable.append(typeTable);
+   mainTable.build(&identStrings, &identStringOffsets, &numIdentStrings);
    
    codeStream.emit(OP_RETURN);
-   codeStream.emitCodeStream(&codeSize, &code, &lineBreakPairs);
+   codeStream.emitCodeStream(&codeSize, &code, &lineBreakPairs, &numFunctionCalls, &functionCalls);
    
    mVM->mCompilerResources->consoleAllocReset();
    
-   if(lineBreakPairCount && fileName)
+   if (lineBreakPairCount)
       calcBreakList();
    
    if(lastIp+1 != codeSize)
    {
       mVM->printf(0, "precompile size mismatch");
    }
+    
+   if (!linkTypes())
+   {
+      mVM->printf(0, "Invalid types in script");
+      return KorkApi::ConsoleValue();
+   }
    
-   return exec(0, fileName, NULL, 0, 0, noCalls, isNativeFrame, NULL, setFrame);
+   return exec(0, fileName, nullptr, 0, 0, noCalls, isNativeFrame, nullptr, setFrame);
 }
 
 //-------------------------------------------------------------------------
@@ -818,33 +960,35 @@ void CodeBlock::decRefCount()
    refCount--;
    if(!refCount)
    {
-      delete this;
+      mVM->Delete(this);
    }
 }
 
 //-------------------------------------------------------------------------
 
-void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStrings )
+void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStrings, bool includeLines )
 {
    U32 ip = startIp;
    U32 endFuncIp = 0;
    bool inFunction = false;
+   char buf[4096];
 
-   auto codeToSte = [downcaseStrings, this](Resources* res, U32 *code, U32 ip) {
+   auto codeToSte = [downcaseStrings, &buf, this](Resources* res, U32 *code, U32 ip) {
       StringTableEntry ste = Compiler::CodeToSTE(res, identStrings, code,  ip);
       if (!ste || !downcaseStrings)
          return ste;
 
       const char *src = ste;
-      static char buf[4096];
       U32 i = 0;
 
       for (; src[i] && i < sizeof(buf) - 1; ++i)
          buf[i] = dTolower(src[i]);
 
       buf[i] = '\0';
-      return StringTable->insert(buf, true);
+      return mVM->internString(buf, true);
    };
+
+   U32 lastLine = 0;
    
    while( ip < codeSize )
    {
@@ -852,15 +996,28 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
       {
          inFunction = false;
       }
+
+      if (includeLines)
+      {
+         U32 breakLine = 0;
+         U32 breakInst = 0;
+         findBreakLine(ip, breakLine, breakInst);
+
+         if (breakLine != lastLine)
+         {
+            mVM->printf(0, "# Line %u", lastLine+1);
+            lastLine = breakLine;
+         }
+      }
       
       switch( code[ ip ++ ] )
       {
             
          case OP_FUNC_DECL:
          {
-            StringTableEntry fnName       = codeToSte(NULL, code, ip);
-            StringTableEntry fnNamespace  = codeToSte(NULL, code, ip+2);
-            StringTableEntry fnPackage    = codeToSte(NULL, code, ip+4);
+            StringTableEntry fnName       = codeToSte(nullptr, code, ip);
+            StringTableEntry fnNamespace  = codeToSte(nullptr, code, ip+2);
+            StringTableEntry fnPackage    = codeToSte(nullptr, code, ip+4);
             bool hasBody = bool(code[ip+6]);
             U32 newIp = code[ ip + 7 ];
             U32 argc = code[ ip + 8 ];
@@ -878,7 +1035,7 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
             
          case OP_CREATE_OBJECT:
          {
-            StringTableEntry objParent = codeToSte(NULL, code, ip);
+            StringTableEntry objParent = codeToSte(nullptr, code, ip);
             bool isDataBlock =          code[ip + 2];
             bool isInternal  =          code[ip + 3];
             bool isSingleton =          code[ip + 4];
@@ -1135,7 +1292,7 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
 
          case OP_SETCURVAR:
          {
-            StringTableEntry var = codeToSte(NULL, code, ip);
+            StringTableEntry var = codeToSte(nullptr, code, ip);
             
             mVM->printf(0, "%i: OP_SETCURVAR var=%s", ip - 1, var );
             ip += 2;
@@ -1144,7 +1301,7 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
          
          case OP_SETCURVAR_CREATE:
          {
-            StringTableEntry var = codeToSte(NULL, code, ip);
+            StringTableEntry var = codeToSte(nullptr, code, ip);
             
             mVM->printf(0, "%i: OP_SETCURVAR_CREATE var=%s", ip - 1, var );
             ip += 2;
@@ -1232,7 +1389,7 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
          
          case OP_SETCURFIELD:
          {
-            StringTableEntry curField = codeToSte(NULL, code, ip);
+            StringTableEntry curField = codeToSte(nullptr, code, ip);
             mVM->printf(0, "%i: OP_SETCURFIELD field=%s", ip - 1, curField );
             ip += 2;
             break;
@@ -1390,7 +1547,7 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
          
          case OP_LOADIMMED_IDENT:
          {
-            StringTableEntry str = codeToSte(NULL, code, ip);
+            StringTableEntry str = codeToSte(nullptr, code, ip);
             mVM->printf(0, "%i: OP_LOADIMMED_IDENT str=%s", ip - 1, str );
             ip += 2;
             break;
@@ -1398,8 +1555,8 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
 
          case OP_CALLFUNC_RESOLVE:
          {
-            StringTableEntry fnNamespace = codeToSte(NULL, code, ip+2);
-            StringTableEntry fnName      = codeToSte(NULL, code, ip);
+            StringTableEntry fnNamespace = codeToSte(nullptr, code, ip+2);
+            StringTableEntry fnName      = codeToSte(nullptr, code, ip);
             U32 callType = code[ip+2];
 
             mVM->printf(0, "%i: OP_CALLFUNC_RESOLVE name=%s nspace=%s callType=%s", ip - 1, fnName, fnNamespace,
@@ -1412,8 +1569,8 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
          
          case OP_CALLFUNC:
          {
-            StringTableEntry fnNamespace = codeToSte(NULL, code, ip+2);
-            StringTableEntry fnName      = codeToSte(NULL, code, ip);
+            StringTableEntry fnNamespace = codeToSte(nullptr, code, ip+2);
+            StringTableEntry fnName      = codeToSte(nullptr, code, ip);
             U32 callType = code[ip+4];
 
             mVM->printf(0, "%i: OP_CALLFUNC name=%s nspace=%s callType=%s", ip - 1, fnName, fnNamespace,
@@ -1514,7 +1671,7 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
          
          case OP_ITER_BEGIN:
          {
-            StringTableEntry varName = codeToSte(NULL, code, ip);
+            StringTableEntry varName = codeToSte(nullptr, code, ip);
             U32 failIp = code[ ip + 2 ];
             
             mVM->printf(0, "%i: OP_ITER_BEGIN varName=%s failIp=%i", ip - 1, varName, failIp );
@@ -1525,7 +1682,7 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
 
          case OP_ITER_BEGIN_STR:
          {
-            StringTableEntry varName = codeToSte(NULL, code, ip);
+            StringTableEntry varName = codeToSte(nullptr, code, ip);
             U32 failIp = code[ ip + 2 ];
             
             mVM->printf(0, "%i: OP_ITER_BEGIN varName=%s failIp=%i", ip - 1, varName, failIp );
@@ -1586,6 +1743,186 @@ void CodeBlock::dumpInstructions( U32 startIp, bool upToReturn, bool downcaseStr
             mVM->printf(0, "%i: OP_DUP_UINT", ip - 1);
             break;
          }
+            
+         // Typed vars
+         
+         case OP_PUSH_TYPED:
+         {
+            mVM->printf(0, "%i: OP_PUSH_TYPED", ip - 1 );
+            break;
+         }
+         case OP_LOADVAR_TYPED:
+         {
+            // Takes from OP_SETCURVAR
+            mVM->printf(0, "%i: OP_LOADVAR_TYPED", ip - 1 );
+            //++ip;
+            break;
+         }
+         case OP_LOADVAR_TYPED_REF:
+         {
+            // Takes from OP_SETCURVAR
+            mVM->printf(0, "%i: OP_LOADVAR_TYPED_REF", ip - 1 );
+            //++ip;
+            break;
+         }
+         case OP_LOADFIELD_TYPED:
+         {
+            // Takes from OP_SETCURFIELD*
+            mVM->printf(0, "%i: OP_LOADFIELD_TYPED", ip - 1 );
+            //++ip;
+            break;
+         }
+         case OP_SAVEVAR_TYPED:
+         {
+            // Sets from OP_SETCURVAR
+            mVM->printf(0, "%i: OP_SAVEVAR_TYPED", ip - 1 );
+            //++ip;
+            break;
+         }
+         case OP_SAVEFIELD_TYPED:
+         {
+            // Sets from OP_SETCURFIELD*
+            mVM->printf(0, "%i: OP_SAVEFIELD_TYPED", ip - 1 );
+            //++ip;
+            break;
+         }
+         case OP_STR_TO_TYPED:
+         {
+            // Casts current StringStack head to input local type id
+            mVM->printf(0, "%i: OP_STR_TO_TYPED", ip - 1);
+            //++ ip;
+            break;
+         }
+         case OP_FLT_TO_TYPED:
+         {
+            // Casts current float value to input local type id
+            U32 typeID = code[ip];
+            mVM->printf(0, "%i: OP_FLT_TO_TYPED", ip - 1);
+            break;
+         }
+         case OP_UINT_TO_TYPED:
+         {
+            // Casts current uint value to input local type id
+            mVM->printf(0, "%i: OP_UINT_TO_TYPED", ip - 1);
+            break;
+         }
+         case OP_TYPED_TO_STR:
+         {
+            mVM->printf(0, "%i: OP_TYPED_TO_STR", ip - 1);
+            break;
+         }
+         case OP_TYPED_TO_FLT:
+         {
+            mVM->printf(0, "%i: OP_TYPED_TO_FLT", ip - 1);
+            break;
+         }
+         case OP_TYPED_TO_UINT:
+         {
+            mVM->printf(0, "%i: OP_TYPED_TO_UINT", ip - 1);
+            break;
+         }
+         case OP_TYPED_TO_NONE:
+         {
+            mVM->printf(0, "%i: OP_TYPED_TO_NONE", ip - 1);
+            break;
+         }
+         case OP_TYPED_OP:
+         {
+            // Performs op on current two items on StringStack
+            // i.e. stack-2 OP stack-1 / left OP right
+            U32 opID = code[ip];
+            mVM->printf(0, "%i: OP_TYPED_OP op=%i", ip - 1, opID);
+            ++ ip;
+            break;
+         }
+         case OP_TYPED_UNARY_OP:
+         {
+            // Performs op on item on StringStack
+            U32 opID = code[ip];
+            mVM->printf(0, "%i: OP_TYPED_UNARY_OP op=%i", ip - 1, opID);
+            ++ ip;
+            break;
+         }
+         case OP_TYPED_OP_REVERSE:
+         {
+            // Performs op on current two items on StringStack
+            // i.e. stack-2 OP stack-1 / left OP right
+            U32 opID = code[ip];
+            mVM->printf(0, "%i: OP_TYPED_OP_REVERSE op=%i", ip - 1, opID);
+            ++ ip;
+            break;
+         }
+         case OP_SETCURFIELD_NONE:
+         {
+            // Unsets current field ref
+            mVM->printf(0, "%i: OP_SETCURFIELD_NONE", ip - 1);
+            break;
+         }
+            
+         case OP_SETVAR_FROM_COPY:
+         {
+            // Sets cur var to copy var
+            mVM->printf(0, "%i: OP_SETVAR_FROM_COPY", ip - 1);
+            break;
+         }
+            
+         case OP_LOADFIELD_VAR:
+         {
+            mVM->printf(0, "%i: OP_LOADFIELD_VAR", ip - 1);
+            break;
+         }
+         case OP_SAVEFIELD_VAR:
+         {
+            mVM->printf(0, "%i: OP_SAVEFIELD_VAR", ip - 1);
+            break;
+         }
+         case OP_SAVEVAR_MULTIPLE:
+         {
+            // Acts like a function call (i.e. relies on popping the frame)
+            // Uses the vars current type.
+            mVM->printf(0, "%i: OP_SAVEVAR_MULTIPLE", ip - 1);
+            break;
+         }
+         case OP_SAVEFIELD_MULTIPLE:
+         {
+            // Pops n values from the StringStack
+            // Uses the fields type.
+            mVM->printf(0, "%i: OP_SAVEFIELD_MULTIPLE", ip - 1);
+            break;
+         }
+         case OP_SET_DYNAMIC_TYPE_FROM_VAR:
+         {
+            mVM->printf(0, "%i: OP_SET_DYNAMIC_TYPE_FROM_VAR", ip - 1);
+            break;
+         }
+
+         case OP_SET_DYNAMIC_TYPE_FROM_FIELD:
+         {
+            mVM->printf(0, "%i: OP_SET_DYNAMIC_TYPE_FROM_FIELD", ip - 1);
+            break;
+         }
+
+         case OP_SET_DYNAMIC_TYPE_FROM_ID:
+         {
+            U32 typeID = code[ip];
+            mVM->printf(0, "%i: OP_SET_DYNAMIC_TYPE_FROM_ID %i", ip - 1, typeID);
+            ip++;
+            break;
+         }
+
+         case OP_SET_DYNAMIC_TYPE_TO_NULL:
+         {
+            mVM->printf(0, "%i: OP_SET_DYNAMIC_TYPE_TO_NULL", ip - 1);
+            break;
+         }
+         
+         case OP_SETCURVAR_TYPE:
+         {
+            U32 typeId = code[ip++];
+            mVM->printf(0, "%i: OP_SETCURVAR_TYPE (type=%s(%i)", ip - 1, getTypeName(typeId), typeId);
+            break;
+         }
+            
          default:
             mVM->printf(0, "%i: !!INVALID!!", ip - 1 );
             break;

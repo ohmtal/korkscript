@@ -1,4 +1,11 @@
 //-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
+
+//-----------------------------------------------------------------------------
 // Copyright (c) 2012 GarageGames, LLC
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -24,13 +31,10 @@
 
 #include "embed/api.h"
 #include "embed/internalApi.h"
-#include "console/simpleLexer.h"
 #include "console/ast.h"
 
 
-#include "core/findMatch.h"
 #include "console/consoleInternal.h"
-#include "core/fileStream.h"
 #include "console/compiler.h"
 #include "console/telnetDebugger.h"
 
@@ -54,18 +58,18 @@ namespace Compiler
       *(ptr+1) = 0;
    }
 
-   F64 consoleStringToNumber(const char *str, StringTableEntry file, U32 line)
+   F64 consoleStringToNumber(Resources* res, const char *str, StringTableEntry file, U32 line)
    {
-      F64 val = dAtof(str);
+      F64 val = atof(str);
       if(val != 0)
          return val;
-      else if(!dStricmp(str, "true"))
+      else if(!strcasecmp(str, "true"))
          return 1;
-      else if(!dStricmp(str, "false"))
+      else if(!strcasecmp(str, "false"))
          return 0;
       else if(file)
       {
-       // TOFIX  Con::warnf(ConsoleLogEntry::General, "%s (%d): string always evaluates to 0.", file, line);
+         res->printf(0, "%s (%d): string \"%s\" always evaluates to 0.", file, line, str);
          return 0;
       }
       return 0;
@@ -79,6 +83,11 @@ namespace Compiler
          globalStringTable.add(ident);
    }
 
+   S32 Resources::precompileType(StringTableEntry ident)
+   {
+      return ident ? getTypeTable().addNoAddress(ident) : -1;
+   }
+
    void Resources::resetTables()
    {
       setCurrentStringTable(&globalStringTable);
@@ -88,6 +97,104 @@ namespace Compiler
       getFunctionFloatTable().reset();
       getFunctionStringTable().reset();
       getIdentTable().reset();
+      getTypeTable().reset();
+
+      globalVarTypes.reset();
+
+      for (U32 i=0; i<VarTypeStackSize; i++)
+      {
+         localVarTypes[i].reset();
+      }
+
+      curLocalVarStackPos = 0;
+   }
+
+   void Resources::pushLocalVarContext()
+   {
+      if (curLocalVarStackPos == VarTypeStackSize-1)
+      {
+         return;
+      }
+      
+      curLocalVarStackPos++;
+   }
+
+   void Resources::popLocalVarContext()
+   {
+      if (curLocalVarStackPos > 0)
+      {
+         curLocalVarStackPos--;
+      }
+
+      localVarTypes[curLocalVarStackPos].reset();
+   }
+
+   VarTypeTableEntry* Resources::getVarInfo(StringTableEntry varName, StringTableEntry typeName)
+   {
+      VarTypeTableEntry* tt = nullptr;
+
+      if (varName[0] == '$')
+      {
+         tt = globalVarTypes.lookupVar(varName);
+      }
+      else if (curLocalVarStackPos == 0)
+      {
+         AssertFatal(false, "Bad variable type stack\n");
+      }
+      else
+      {
+         tt = localVarTypes[curLocalVarStackPos-1].lookupVar(varName);
+      }
+
+      if (tt &&
+         typeName != nullptr)
+      {
+         if (tt->typeName &&
+             tt->typeName != typeName)
+         {
+            //printf("Variable type redefined: %s vs %s\n");
+         }
+         
+         tt->typeName = typeName;
+         tt->typeId = allowTypes ? precompileType(typeName) : -1;
+      }
+
+      return tt;
+   }
+
+   void Resources::printf(U32 level, const char *fmt, ...)
+   {
+      va_list argptr;
+      va_start(argptr, fmt);
+      char buf[8192];
+      vsnprintf(buf, sizeof(buf), fmt, argptr);
+      logFn(level, buf, logUser);
+      va_end(argptr);
+   }
+
+   VarTypeTableEntry* VarTypeTable::lookupVar(StringTableEntry name)
+   {
+      for (VarTypeTableEntry* entry = table; entry; entry = entry->next)
+      {
+         if (entry->name == name)
+         {
+            return entry;
+         }
+      }
+
+      VarTypeTableEntry* newEntry = (VarTypeTableEntry *) res->consoleAlloc(sizeof(VarTypeTableEntry));
+      newEntry->next = table;
+      table = newEntry;
+      
+      newEntry->name = name;
+      newEntry->typeName = nullptr;
+      newEntry->typeId = -1;
+      return newEntry;
+   }
+
+   void VarTypeTable::reset()
+   {
+      table = nullptr;
    }
 
 }
@@ -110,12 +217,12 @@ U32 CompilerStringTable::add(const char *str, bool caseSens, bool tag)
 
       if(caseSens)
       {
-         if(!dStrcmp((*walk)->string, str))
+         if(!strcmp((*walk)->string, str))
             return (*walk)->start;
       }
       else
       {
-         if(!dStricmp((*walk)->string, str))
+         if(!strcasecmp((*walk)->string, str))
             return (*walk)->start;
       }
    }
@@ -123,42 +230,42 @@ U32 CompilerStringTable::add(const char *str, bool caseSens, bool tag)
    // Write it out.
    Entry *newStr = (Entry *) res->consoleAlloc(sizeof(Entry));
    *walk = newStr;
-   newStr->next = NULL;
+   newStr->next = nullptr;
    newStr->start = totalLen;
-   U32 len = dStrlen(str) + 1;
+   U32 len = strlen(str) + 1;
    if(tag && len < 7) // alloc space for the numeric tag 1 for tag, 5 for # and 1 for nul
       len = 7;
    totalLen += len;
    newStr->string = (char *) res->consoleAlloc(dAlignSize(len, 8));
    newStr->len = len;
    newStr->tag = tag;
-   dStrcpy(newStr->string, str);
+   memcpy(newStr->string, str, len);
    return newStr->start;
 }
 
 U32 CompilerStringTable::addIntString(U32 value)
 {
-   dSprintf(buf, sizeof(buf), "%d", value);
+   snprintf(buf, sizeof(buf), "%d", value);
    return add(buf);
 }
 
 U32 CompilerStringTable::addFloatString(F64 value)
 {
-   dSprintf(buf, sizeof(buf), "%g", value);
+   snprintf(buf, sizeof(buf), "%g", value);
    return add(buf);
 }
 
 void CompilerStringTable::reset()
 {
-   list = NULL;
+   list = nullptr;
    totalLen = 0;
 }
 
 char *CompilerStringTable::build()
 {
-   char *ret = new char[totalLen];
+   char *ret = KorkApi::VMem::NewArray<char>(totalLen);
    for(Entry *walk = list; walk; walk = walk->next)
-      dStrcpy(ret + walk->start, walk->string);
+      strcpy(ret + walk->start, walk->string);
    return ret;
 }
 
@@ -180,19 +287,19 @@ U32 CompilerFloatTable::add(F64 value)
          return i;
    Entry *newFloat = (Entry *) res->consoleAlloc(sizeof(Entry));
    newFloat->val = value;
-   newFloat->next = NULL;
+   newFloat->next = nullptr;
    count++;
    *walk = newFloat;
    return count-1;
 }
 void CompilerFloatTable::reset()
 {
-   list = NULL;
+   list = nullptr;
    count = 0;
 }
 F64 *CompilerFloatTable::build()
 {
-   F64 *ret = new F64[count];
+   F64 *ret = KorkApi::VMem::NewArray<F64>(count);
    U32 i = 0;
    for(Entry *walk = list; walk; walk = walk->next, i++)
       ret[i] = walk->val;
@@ -210,18 +317,16 @@ void CompilerFloatTable::write(Stream &st)
 
 void CompilerIdentTable::reset()
 {
-   list = NULL;
-   tail = NULL;
+   list = nullptr;
+   tail = nullptr;
    numIdentStrings = 0;
 }
 
-U32 CompilerIdentTable::add(StringTableEntry ste, U32 ip)
+U32 CompilerIdentTable::addNoAddress(StringTableEntry ste)
 {
    U32 index = res->globalStringTable.add(ste, false);
-   Patch* newPatch = (Patch*)res->consoleAlloc(sizeof(Patch));
-   newPatch->ip = ip;
    
-   FullEntry* patchEntry = NULL;
+   FullEntry* patchEntry = nullptr;
    
    U32 elementIndex = 0;
    for(FullEntry *walk = list; walk; walk = walk->next)
@@ -234,15 +339,62 @@ U32 CompilerIdentTable::add(StringTableEntry ste, U32 ip)
       elementIndex++;
    }
    
-   if (patchEntry == NULL)
+   if (patchEntry == nullptr)
    {
       patchEntry = (FullEntry *) res->consoleAlloc(sizeof(FullEntry));
-      patchEntry->patch = NULL;
+      patchEntry->patch = nullptr;
       patchEntry->steName = ste;
       patchEntry->offset = index;
-      patchEntry->next = NULL;
+      patchEntry->next = nullptr;
+      patchEntry->numInstances = 0;
       
-      if (tail == NULL)
+      if (tail == nullptr)
+      {
+         list = patchEntry;
+         tail = patchEntry;
+      }
+      else
+      {
+         tail->next = patchEntry;
+         tail = patchEntry;
+      }
+      
+      elementIndex = numIdentStrings++;
+   }
+   
+   return elementIndex;
+
+}
+
+U32 CompilerIdentTable::add(StringTableEntry ste, U32 ip)
+{
+   U32 index = res->globalStringTable.add(ste, false);
+   Patch* newPatch = (Patch*)res->consoleAlloc(sizeof(Patch));
+   newPatch->ip = ip;
+   
+   FullEntry* patchEntry = nullptr;
+   
+   U32 elementIndex = 0;
+   for(FullEntry *walk = list; walk; walk = walk->next)
+   {
+      if(walk->offset == index)
+      {
+         patchEntry = walk;
+         break;
+      }
+      elementIndex++;
+   }
+   
+   if (patchEntry == nullptr)
+   {
+      patchEntry = (FullEntry *) res->consoleAlloc(sizeof(FullEntry));
+      patchEntry->patch = nullptr;
+      patchEntry->steName = ste;
+      patchEntry->offset = index;
+      patchEntry->numInstances = 0;
+      patchEntry->next = nullptr;
+      
+      if (tail == nullptr)
       {
          list = patchEntry;
          tail = patchEntry;
@@ -284,8 +436,8 @@ void CompilerIdentTable::write(Stream &st)
 void CompilerIdentTable::build(StringTableEntry** strings,  U32** stringOffsets, U32* numStrings)
 {
    *numStrings = numIdentStrings;
-   *stringOffsets = new U32[numIdentStrings];
-   *strings = new StringTableEntry[numIdentStrings];
+   *stringOffsets = KorkApi::VMem::NewArray<U32>(numIdentStrings);
+   *strings = KorkApi::VMem::NewArray<StringTableEntry>(numIdentStrings);
    
    U32 i = 0;
    for(FullEntry* walk = list; walk; walk = walk->next)
@@ -295,11 +447,33 @@ void CompilerIdentTable::build(StringTableEntry** strings,  U32** stringOffsets,
    }
 }
 
+U32 CompilerIdentTable::append(CompilerIdentTable &other)
+{
+   U32 offset = numIdentStrings;
+   
+   if (other.list == nullptr)
+   {
+      return numIdentStrings;
+   }
+   
+   if (list == nullptr)
+   {
+      list = other.list;
+      numIdentStrings = other.numIdentStrings;
+      return 0;
+   }
+   
+   tail->next = other.list;
+   tail = other.tail;
+   numIdentStrings += other.numIdentStrings;
+   return offset;
+}
+
 //-------------------------------------------------------------------------
   
 U8 *CodeStream::allocCode(U32 sz)
 {
-   U8 *ptr = NULL;
+   U8 *ptr = nullptr;
    if (mCodeHead)
    {
       const U32 bytesLeft = BlockSize - mCodeHead->size;
@@ -311,15 +485,15 @@ U8 *CodeStream::allocCode(U32 sz)
       }
    }
    
-   CodeData *data = new CodeData;
-   data->data = (U8*)dMalloc(BlockSize);
+   CodeData *data = KorkApi::VMem::New<CodeData>();
+   data->data = KorkApi::VMem::NewArray<U8>(BlockSize);
    data->size = sz;
-   data->next = NULL;
+   data->next = nullptr;
    
    if (mCodeHead)
       mCodeHead->next = data;
    mCodeHead = data;
-   if (mCode == NULL)
+   if (mCode == nullptr)
       mCode = data;
    return data->data;
 }
@@ -364,27 +538,33 @@ void CodeStream::fixLoop(U32 loopBlockStart, U32 breakPoint, U32 continuePoint)
 
 //-------------------------------------------------------------------------
   
-void CodeStream::emitCodeStream(U32 *size, U32 **stream, U32 **lineBreaks)
+void CodeStream::emitCodeStream(U32 *size, U32 **stream, U32 **lineBreaks, U32* numFuncCalls, void*** funcCallsPtr)
 {
    // Alloc stream
    U32 numLineBreaks = getNumLineBreaks();
-   *stream = new U32[mCodePos + (numLineBreaks * 2)];
-   dMemset(*stream, '\0', mCodePos + (numLineBreaks * 2));
+   *stream = KorkApi::VMem::NewArray<U32>(mCodePos + (numLineBreaks * 2));
+   memset(*stream, '\0', mCodePos + (numLineBreaks * 2));
    *size = mCodePos;
    
    // Dump chunks & line breaks
    U32 outBytes = mCodePos * sizeof(U32);
    U8 *outPtr = *((U8**)stream);
-   for (CodeData *itr = mCode; itr != NULL; itr = itr->next)
+   for (CodeData *itr = mCode; itr != nullptr; itr = itr->next)
    {
       U32 bytesToCopy = itr->size > outBytes ? outBytes : itr->size;
-      dMemcpy(outPtr, itr->data, bytesToCopy);
+      memcpy(outPtr, itr->data, bytesToCopy);
       outPtr += bytesToCopy;
       outBytes -= bytesToCopy;
    }
    
    *lineBreaks = *stream + mCodePos;
-   dMemcpy(*lineBreaks, mBreakLines.address(), sizeof(U32) * mBreakLines.size());
+   std::copy(mBreakLines.begin(), mBreakLines.end(), *lineBreaks);
+   
+   // Dump func calls
+   mNumFuncCalls++; // reserve 0
+   *numFuncCalls = mNumFuncCalls;
+   *funcCallsPtr = KorkApi::VMem::NewArray<void*>(mNumFuncCalls);
+   memset(*funcCallsPtr, '\0', sizeof(void*) * mNumFuncCalls);
    
    // Apply patches on top
    for (U32 i=0; i<mPatchList.size(); i++)
@@ -405,19 +585,20 @@ void CodeStream::reset()
    mBreakLines.clear();
    
    // Pop down to one code block
-   CodeData *itr = mCode ? mCode->next : NULL;
-   while (itr != NULL)
+   CodeData *itr = mCode ? mCode->next : nullptr;
+   while (itr != nullptr)
    {
       CodeData *next = itr->next;
-      dFree(itr->data);
-      delete(itr);
+      KorkApi::VMem::Delete(itr->data);
+      KorkApi::VMem::Delete(itr);
       itr = next;
    }
    
    if (mCode)
    {
       mCode->size = 0;
-      mCode->next = NULL;
+      mCode->next = nullptr;
       mCodeHead = mCode;
    }
 }
+

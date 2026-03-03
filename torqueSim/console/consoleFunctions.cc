@@ -1,14 +1,18 @@
 #include "platform/platform.h"
+#include "platform/platformProcess.h"
+#include "platform/platformString.h"
 #include "console/console.h"
 
 #include "core/fileStream.h"
+
+#include <vector>
 
 // This is a temporary hack to get tools using the library to
 // link in this module which contains no other references.
 bool LinkConsoleFunctions = false;
 
 // Buffer for expanding script filenames.
-static char scriptFilenameBuffer[1024];
+char scriptFilenameBuffer[1024];
 
 extern KorkApi::Vm* sVM;
 
@@ -557,7 +561,7 @@ ConsoleFunction(firstWord, const char *, 2, 2, "firstWord(text)")
    argc;
    const char *word = dStrchr(argv[1], ' ');
    U32 len;
-   if(word == NULL)
+   if(word == nullptr)
       len = dStrlen(argv[1]);
    else
       len = word - argv[1];
@@ -572,7 +576,7 @@ ConsoleFunction(restWords, const char *, 2, 2, "restWords(text)")
 {
    argc;
    const char *word = dStrchr(argv[1], ' ');
-   if(word == NULL)
+   if(word == nullptr)
       return "";
    KorkApi::ConsoleValue retV = Con::getReturnBuffer(dStrlen(word + 1) + 1);
    char *ret = (char*)retV.evaluatePtr(vmPtr->getAllocBase());
@@ -604,25 +608,27 @@ ConsoleFunction(NextToken,const char *,4,4,"nextToken(str,token,delim)")
       // no need for special '\0' check since it can never be in delim
       while (isInSet(*str, delim))
          str++;
-
+      
       // skip over any characters that are NOT a member of delim
       const char *tmp = str;
-
+      
       while (*str && !isInSet(*str, delim))
          str++;
-
+      
       // terminate the token
       if (*str)
          *str++ = 0;
-
-#if TOFIX
+      
       // set local variable if inside a function
-      if (gEvalState.stack.size() && 
-         gEvalState.stack.last()->scopeName)
-         Con::setLocalVariable(token,tmp);
+      KorkApi::FiberFrameInfo info = vmPtr->getCurrentFiberFrameInfo();
+      if (info.scopeName && info.scopeName[0] != '\0')
+      {
+         vmPtr->setLocalVariable(vmPtr->internString(token), KorkApi::ConsoleValue::makeString(tmp));
+      }
       else
-         Con::setVariable(token,tmp);
-#endif
+      {
+         vmPtr->setGlobalVariable(vmPtr->internString(token), KorkApi::ConsoleValue::makeString(tmp));
+      }
 
       // advance str past the 'delim space'
       while (isInSet(*str, delim))
@@ -637,45 +643,16 @@ ConsoleFunctionGroupEnd( FieldManipulators )
 
 ConsoleFunctionGroupBegin( TaggedStrings, "Functions dealing with tagging/detagging strings.");
 
-ConsoleFunction(detag, const char *, 2, 2, "detag(textTagString)")
+ConsoleFunctionValue(detag, 2, 2, "detag(textTagString)")
 {
-   argc;
-   if(argv[1][0] == KorkApi::StringTagPrefixByte)
-   {
-      const char *word = dStrchr(argv[1], ' ');
-      if(word == NULL)
-         return "";
-      KorkApi::ConsoleValue retV = Con::getReturnBuffer(dStrlen(word + 1) + 1);
-      char *ret = (char*)retV.evaluatePtr(vmPtr->getAllocBase());
-      dStrcpy(ret, word + 1);
-      return ret;
-   }
-   else
-      return argv[1];
+   // NOTE: assumes tag type returns original string when cast to string
+   return KorkApi::ConsoleValue::makeString(vmPtr->valueAsString(argv[1]));
 }
 
-ConsoleFunction(getTag, const char *, 2, 2, "getTag(textTagString)")
+ConsoleFunctionValue(getTag, 2, 2, "getTag(textTagString)")
 {
-   argc;
-   if(argv[1][0] == KorkApi::StringTagPrefixByte)
-   {
-      const char * space = dStrchr(argv[1], ' ');
-
-      U32 len;
-      if(space)
-         len = space - argv[1];
-      else
-         len = dStrlen(argv[1]) + 1;
-
-      KorkApi::ConsoleValue retV = Con::getReturnBuffer(len);
-      char *ret = (char*)retV.evaluatePtr(vmPtr->getAllocBase());
-      dStrncpy(ret, argv[1] + 1, len - 1);
-      ret[len - 1] = 0;
-
-      return(ret);
-   }
-   else
-      return(argv[1]);
+   // NOTE: assumes tag type returns tag id as int
+   return KorkApi::ConsoleValue::makeUnsigned((U32)vmPtr->valueAsInt(argv[1]));
 }
 
 ConsoleFunctionGroupEnd( TaggedStrings );
@@ -781,214 +758,25 @@ ConsoleFunction(quitWithErrorMessage, void, 2, 2, "quitWithErrorMessage(msg)"
 
 ConsoleFunctionGroupBegin(MetaScripting, "Functions that let you manipulate the scripting engine programmatically.");
 
-ConsoleFunction(call, const char *, 2, 0, "call(funcName [,args ...])")
+ConsoleFunctionValue(call, 2, 0, "call(funcName [,args ...])")
 {
-   const char* result = Con::execute(argc - 1, argv + 1);
+   KorkApi::ConsoleValue result = Con::execute(argc - 1, argv + 1);
    vmPtr->clearCurrentFiberError();
    return result;
 }
 
-static U32 execDepth = 0;
-static U32 journalDepth = 1;
-
-ConsoleFunction(exec, bool, 2, 4, "exec(fileName [, nocalls [,journalScript]])")
+ConsoleFunctionValue(exec, 2, 4, "exec(fileName [, nocalls [,journalScript]])")
 {
-   bool journal = false;
-
-   execDepth++;
-   if(journalDepth >= execDepth)
-      journalDepth = execDepth + 1;
-   else
-      journal = true;
-
-   bool noCalls = false;
-   bool ret = false;
-
-   if(argc >= 3 && dAtoi(argv[2]))
-      noCalls = true;
-
-   if(argc >= 4 && dAtoi(argv[3]) && !journal)
-   {
-      journal = true;
-      journalDepth = execDepth;
-   }
-
-   // Determine the filename we actually want...
-   Con::expandScriptFilename(scriptFilenameBuffer, sizeof(scriptFilenameBuffer), argv[1]);
-
-   const char *ext = dStrrchr(scriptFilenameBuffer, '.');
-
-   if(!ext)
-   {
-      // We need an extension!
-      Con::errorf(ConsoleLogEntry::Script, "exec: invalid script file name %s.", scriptFilenameBuffer);
-      execDepth--;
-      return false;
-   }
-
-   StringTableEntry scriptFileName = StringTable->insert(scriptFilenameBuffer);
-   StringTableEntry compiledScriptFileName = NULL;
-
-   // Is this a file we should compile?
-   bool compiled = dStricmp(ext, ".mis") && !journal && !Con::getBoolVariable("Scripts::ignoreDSOs");
-
-   // Ok, we let's try to load and compile the script.
-   bool scriptExists = Platform::isFile(scriptFileName);
-   bool compiledScriptExists = false;
-
-   char nameBuffer[512];
-   char* script = NULL;
-   U32 scriptSize = 0;
-   U32 version;
-
-   FileStream compiledStream;
-   FileTime comModifyTime, scrModifyTime;
-
-   // If we're supposed to be compiling this file, check to see if there's a DSO
-   if(compiled)
-   {
-      dStrcpyl(nameBuffer, sizeof(nameBuffer), scriptFileName, ".dso", NULL);
-      compiledScriptFileName = StringTable->insert(nameBuffer);
-      compiledScriptExists = Platform::isFile(compiledScriptFileName);
-
-      if(compiledScriptExists)
-         Platform::getFileTimes(compiledScriptFileName, NULL, &comModifyTime);
-      if(scriptExists)
-         Platform::getFileTimes(scriptFileName, NULL, &scrModifyTime);
-   }
-
-   U8* blockBytes = NULL;
-   U32 blockSize = 0;
-
-   // If we had a DSO, let's check to see if we should be reading from it.
-   if(compiled && compiledScriptExists && 
-      (!scriptExists || Platform::compareFileTimes(comModifyTime, scrModifyTime) >= 0))
-   {
-      if (compiledStream.open(nameBuffer, FileStream::Read))
-      {
-         // Check the version!
-         compiledStream.read(&version);
-         if(version != KorkApi::DSOVersion)
-         {
-            Con::warnf("exec: Found an old DSO (%s, ver %d < %d), ignoring.", 
-                       nameBuffer, version, KorkApi::DSOVersion);
-            compiledStream.close();
-         }
-         else
-         {
-            compiledStream.setPosition(0);
-            blockSize = compiledStream.getStreamSize();
-            blockBytes = (U8*)dMalloc(blockSize);
-            compiledStream.read(blockSize, blockBytes);
-         }
-      }
-   }
-
-   if(scriptExists && compiledStream.getStatus() != Stream::Closed)
-   {
-      // If we have source but no compiled version, then we need to compile
-      // (and journal as we do so, if that's required).
-
-      FileStream s;
-
-      if(s.open(scriptFileName, FileStream::Read))
-      {
-         scriptSize = s.getStreamSize();
-         script = new char [scriptSize+1];
-         s.read(scriptSize, script);
-
-         s.close();
-         script[scriptSize] = 0;
-      }
-
-      if (!scriptSize || !script)
-      {
-         if (blockBytes)
-         {
-            dFree(blockBytes);
-         }
-         delete [] script;
-         Con::errorf(ConsoleLogEntry::Script, "exec: invalid script file %s.", scriptFileName);
-         execDepth--;
-         return false;
-      }
-
-      if(compiled)
-      {
-         // compile this baddie.
-         Con::printf("Compiling %s...", scriptFileName);
-
-         bool errorCond = true;
-
-         if (vmPtr->compileCodeBlock(script, scriptFileName, &blockSize, &blockBytes))
-         {
-            if (!compiledStream.open(nameBuffer, FileStream::Write))
-            {
-               errorCond = true;
-            }
-         }
-
-         if (errorCond)
-         {
-            // We have to exit out here, as otherwise we get double error reports.
-            delete [] script;
-            execDepth--;
-
-            if (blockBytes)
-            {
-               dFree(blockBytes);
-            }
-            return false;
-         }
-      }
-   }
-
-   if(blockBytes)
-   {
-      // Delete the script object first to limit memory used
-      // during recursive execs.
-      delete [] script;
-      script = 0;
-
-      // We're all compiled, so let's run it.
-      Con::printf("Loading compiled script %s.", scriptFileName);
-      vmPtr->execCodeBlock(blockSize, blockBytes, scriptFileName, noCalls, 0);
-      vmPtr->clearCurrentFiberError();
-
-      dFree(blockBytes);
-      ret = true;
-   }
-   else if(script)
-   {
-      // No compiled script,  let's just try executing it
-      // directly... this is either a mission file, or maybe
-      // we're on a readonly volume.
-      Con::printf("Executing %s.", scriptFileName);
-
-      if (vmPtr->compileCodeBlock(script, scriptFileName, &blockSize, &blockBytes))
-      {
-         vmPtr->execCodeBlock(blockSize, blockBytes, scriptFileName, noCalls, 0);
-         vmPtr->clearCurrentFiberError();
-         dFree(blockBytes);
-         ret = true;
-      }
-   }
-   else
-   {
-      // Don't have anything.
-      Con::warnf(ConsoleLogEntry::Script, "Missing file: %s!", scriptFileName);
-      ret = false;
-   }
-
-   delete [] script;
-   execDepth--;
-   return ret;
+   bool journal = argc > 3 ? vmPtr->valueAsBool(argv[3]) : false;
+   bool noCalls = argc > 2 ? vmPtr->valueAsBool(argv[2]) : false;
+   const char* fileName = vmPtr->valueAsString(argv[1]);
+   
+   return KorkApi::ConsoleValue::makeUnsigned(Con::exec(fileName, noCalls, journal));
 }
 
 ConsoleFunction(eval, const char *, 2, 2, "eval(consoleString)")
 {
-   argc;
-   const char* returnValue = Con::evaluate(argv[1], false, NULL);
+   const char* returnValue = Con::evaluate(argv[1], false, nullptr);
    vmPtr->clearCurrentFiberError();
    return returnValue;
 }
@@ -1007,7 +795,7 @@ ConsoleFunction(isFunction, bool, 2, 2, "(string funcName)")
 
 ConsoleFunction(export, void, 2, 4, "export(searchString [, fileName [,append]])")
 {
-   const char *filename = NULL;
+   const char *filename = nullptr;
    bool append = (argc == 4) ? dAtob(argv[3]) : false;
 
    if (argc >= 3)
@@ -1018,13 +806,55 @@ ConsoleFunction(export, void, 2, 4, "export(searchString [, fileName [,append]])
       }
    }
    
-   // TOFIX gEvalState.globalVars.exportVariables(argv[1]), filename, append);
+   if (filename)
+   {
+      FileStream fs;
+      if (fs.open(filename, append ? FileStream::WriteAppend : FileStream::Write))
+      {
+         if(append)
+            fs.setPosition(fs.getStreamSize());
+         
+         vmPtr->enumGlobals(argv[1], &fs, [](KorkApi::Vm* vmPtr, void* streamPtr, const char* name, KorkApi::ConsoleValue value){
+            FileStream* stream = (FileStream*)streamPtr;
+            
+            char buffer[1024];
+            char expandBuffer[1024];
+            
+            if (value.isFloat() || value.isUnsigned())
+            {
+               dSprintf(buffer, sizeof(buffer), "%s = %s;\r\n", name, vmPtr->valueAsString(value));
+            }
+            else
+            {
+               expandEscape(expandBuffer, vmPtr->valueAsString(value));
+               dSprintf(buffer, sizeof(buffer), "%s = \"%s\";\r\n", name, expandBuffer);
+            }
+         });
+      }
+   }
+   else
+   {
+      vmPtr->enumGlobals(argv[1], nullptr, [](KorkApi::Vm* vmPtr, void* streamPtr, const char* name, KorkApi::ConsoleValue value){
+         
+         char expandBuffer[1024];
+         
+         if (value.isFloat() || value.isUnsigned())
+         {
+            Con::printf("%s = %s;", name, vmPtr->valueAsString(value));
+         }
+         else
+         {
+            expandEscape(expandBuffer, vmPtr->valueAsString(value));
+            Con::printf("%s = \"%s\";", name, expandBuffer);
+         }
+      });
+   }
 }
 
 ConsoleFunction(deleteVariables, void, 2, 2, "deleteVariables(wildCard)")
 {
    argc;
-   vmPtr->removeGlobalVariable(StringTable->insert((const char*)argv[1]));
+   vmPtr->removeGlobalVariable(vmPtr->internString((const char*)argv[1]));
 }
 
 //----------------------------------------------------------------
@@ -1146,7 +976,7 @@ ConsoleFunction(getDirectoryList, const char*, 2, 3, "getDirectoryList(%path, %d
       depth = dAtoi(argv[2]);
 
    // Dump the directories.
-   Vector<StringTableEntry> directories;
+   std::vector<StringTableEntry> directories;
    Platform::dumpDirectories(path, directories, depth, true);
 
    // Grab the required buffer length.
@@ -1293,4 +1123,66 @@ ConsoleFunction( telnetSetParameters, void, 4, 5, "(int port, string consolePass
 {
    sVM->telnetSetParameters(dAtoi(argv[1]), argv[2], argv[3], argc == 5 ? dAtob( argv[4] ) : false);
 }
+
+
+ConsoleFunction(backtrace, void, 1, 1, "Print the call stack.")
+{
+   argc; argv;
+   U32 totalSize = 1;
+
+   S32 stackCount = vmPtr->getCurrentFiberFrameDepth();
+   std::vector<KorkApi::FiberFrameInfo> frames;
+   for (S32 i=0; i<stackCount; i++)
+   {
+      frames.push_back(vmPtr->getCurrentFiberFrameInfo(i));
+   }
+
+   for(S32 i = 0; i < stackCount; i++)
+   {
+      totalSize += strlen(frames[i].scopeName) + 3;
+      if (frames[i].scopeNamespace)
+      {
+         totalSize += strlen(frames[i].scopeNamespace) + 2;
+      }
+   }
+
+   KorkApi::ConsoleValue bufV = Con::getReturnBuffer(totalSize);
+   char* buf = (char*)bufV.evaluatePtr(vmPtr->getAllocBase());
+   buf[0] = 0;
+   for(U32 i = 0; i < stackCount; i++)
+   {
+      strcat(buf, "->");
+      if(frames[i].scopeNamespace)
+      {
+         strcat(buf, frames[i].scopeNamespace);
+         strcat(buf, "::");
+      }
+      strcat(buf, frames[i].scopeName);
+   }
+
+   Con::printf("BackTrace: %s", buf);
+}
+
+ConsoleFunctionGroupBegin( Packages, "Functions relating to the control of packages.");
+
+ConsoleFunction(isPackage,bool,2,2,"isPackage(packageName)")
+{
+   StringTableEntry packageName = vmPtr->internString(argv[1]);
+   return sVM->isPackage(packageName);
+}
+
+ConsoleFunction(activatePackage, void,2,2,"activatePackage(packageName)")
+{
+   StringTableEntry packageName = vmPtr->internString(argv[1]);
+   return sVM->activatePackage(packageName);
+}
+
+ConsoleFunction(deactivatePackage, void,2,2,"deactivatePackage(packageName)")
+{
+   StringTableEntry packageName = vmPtr->internString(argv[1]);
+   return sVM->deactivatePackage(packageName);
+}
+
+ConsoleFunctionGroupEnd( Packages );
+
 

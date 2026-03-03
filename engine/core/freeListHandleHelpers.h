@@ -1,5 +1,10 @@
 #pragma once
-#include "core/tVector.h"
+//-----------------------------------------------------------------------------
+// Copyright (c) 2025-2026 korkscript contributors.
+// See AUTHORS file and git repository for contributor information.
+//
+// SPDX-License-Identifier: MIT
+//-----------------------------------------------------------------------------
 
 namespace FreeListHandle
 {
@@ -38,6 +43,7 @@ namespace FreeListHandle
       inline U32 getNum() const { return parts.index; }
       inline U8 getGen() const { return (U8)parts.generation; }
       inline U32 getIndex() const { return parts.index-1; }
+      inline U32 getWeakValue() const { return makeValue(parts.index, parts.generation, false); }
       inline U32 getValue() const { return value; }
       inline bool setHeavyRef(bool value) { return parts.heavyRef = (U32)value; }
       inline bool isHeavyRef() const { return parts.heavyRef != 0; }
@@ -83,6 +89,7 @@ namespace FreeListHandle
       inline U64 getNum() const { return parts.index; }
       inline U8 getGen() const { return (U8)parts.generation; }
       inline U64 getIndex() const { return parts.index-1; }
+      inline U64 getWeakValue() const { return makeValue(parts.index, parts.generation, false); }
       inline U64 getValue() const { return value; }
       inline bool setHeavyRef(bool value) { return parts.heavyRef = (U32)value; }
       inline bool isHeavyRef() const { return parts.heavyRef != 0; }
@@ -106,9 +113,9 @@ namespace FreeListHandle
       if (realIndex < container.mItems.size())
       {
          Y* item = &container.mItems[(S32)realIndex];
-         return item->mGeneration == handle.parts.generation ? item : NULL;
+         return item->mGeneration == handle.parts.generation ? item : nullptr;
       }
-      return NULL;
+      return nullptr;
    }
 
    template<class T, class H, class Y> inline Y* resolveHandlePtr(const T& container, const H& handle)
@@ -117,9 +124,9 @@ namespace FreeListHandle
       if (realIndex < container.mItems.size())
       {
          Y* item = container.mItems[(S32)realIndex];
-         return item != NULL && item->mGeneration == handle.parts.generation ? item : NULL;
+         return item != nullptr && item->mGeneration == handle.parts.generation ? item : nullptr;
       }
-      return NULL;
+      return nullptr;
    }
 
    template<class T> inline U32 getReserveSize(T& container)
@@ -133,14 +140,14 @@ namespace FreeListHandle
 /// Free structure list. T must have "mAllocNumber" to designate it is allocated and 
 /// what index it is. Also "mGeneration" should be present.
 /// T should also implement initFromHandle, makeHandle, isValidHandle and extractHandle.
-template<class T, class B> struct FreeListStruct
+template<class T, class B,  template<class...> class VEC> struct FreeListStruct
 {
-   Vector<T> mItems;
-   Vector<typename B::ValueType> mFreeItems;
-   U32 mChunkReserveSize;
-   
    typedef T ValueType;
    typedef B HandleType;
+   
+   VEC<T> mItems;
+   VEC<typename B::ValueType> mFreeItems;
+   U32 mChunkReserveSize;
    
    FreeListStruct() : mChunkReserveSize(4096)
    {
@@ -179,7 +186,7 @@ template<class T, class B> struct FreeListStruct
 
    void freeItemPtr(T* itemPtr)
    {
-      if (itemPtr == NULL || itemPtr->mAllocNumber == 0)
+      if (itemPtr == nullptr || itemPtr->mAllocNumber == 0)
          return;
 
       mFreeItems.push_back(itemPtr->mAllocNumber-1);
@@ -241,10 +248,10 @@ template<class T, class B> struct FreeListStruct
 /// Underlying memory management of item pointers should be
 /// handled by another class.
 /// Reference counting should be handled by the handle class.
-template<class T, class B> struct FreeListPtr
+template<class T, class B, template<class...> class VEC> struct FreeListPtr
 {
-   Vector<T*> mItems;
-   Vector<typename B::ValueType> mFreeItems;
+   VEC<T*> mItems;
+   VEC<typename B::ValueType> mFreeItems;
    U32 mChunkReserveSize;
    
    typedef B HandleType;
@@ -272,7 +279,7 @@ template<class T, class B> struct FreeListPtr
       }
       else if (mFreeItems.size() > 0)
       {
-         index = mFreeItems.last();
+         index = mFreeItems.back();
          mFreeItems.pop_back();
          mItems[index] = itemPtr;
          itemPtr->mAllocNumber = index+1;
@@ -291,10 +298,10 @@ template<class T, class B> struct FreeListPtr
 
    void freeListPtr(T* itemPtr)
    {
-      if (itemPtr == NULL || itemPtr->mAllocNumber == 0)
+      if (itemPtr == nullptr || itemPtr->mAllocNumber == 0)
          return;
 
-      mItems[itemPtr->mAllocNumber-1] = NULL;
+      mItems[itemPtr->mAllocNumber-1] = nullptr;
       mFreeItems.push_back(itemPtr->mAllocNumber-1);
       itemPtr->reset();
       itemPtr->mAllocNumber = 0;
@@ -333,7 +340,7 @@ template<class T, class B> struct FreeListPtr
       for (auto itr = mItems.begin(); itr != mItems.end(); itr++)
       {
          T* item = *itr;
-         if (item == NULL || (item && item->mAllocNumber == 0))
+         if (item == nullptr || (item && item->mAllocNumber == 0))
             continue;
          func(item);
       }
@@ -344,7 +351,7 @@ template<class T, class B> struct FreeListPtr
       for (auto itr = mItems.begin(); itr != mItems.end(); itr++)
       {
          T* item = *itr;
-         if (item == NULL || (item && item->mAllocNumber == 0))
+         if (item == nullptr || (item && item->mAllocNumber == 0))
             continue;
          if (func(item))
          {

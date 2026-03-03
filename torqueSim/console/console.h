@@ -41,6 +41,7 @@ class Namespace;
 namespace KorkApi
 {
    typedef Namespace* NamespaceId;
+   struct ConsoleValue;
 }
 
 /// Represents an entry in the log.
@@ -154,17 +155,9 @@ typedef S32             (*IntCallback)(SimObject *obj, KorkApi::Vm* vmPtr, S32 a
 typedef F32           (*FloatCallback)(SimObject *obj, KorkApi::Vm* vmPtr, S32 argc, const char *argv[]);
 typedef void           (*VoidCallback)(SimObject *obj, KorkApi::Vm* vmPtr, S32 argc, const char *argv[]); // We have it return a value so things don't break..
 typedef bool           (*BoolCallback)(SimObject *obj, KorkApi::Vm* vmPtr, S32 argc, const char *argv[]);
+typedef KorkApi::ConsoleValue   (*ValueCallback)(SimObject *obj, KorkApi::Vm* vmPtr, S32 argc, KorkApi::ConsoleValue argv[]);
 
 using ConsumerCallback = KorkApi::ConsumerCallback;
-/// @}
-
-/// @defgroup console_types Scripting Engine Type Functions
-/// @ingroup tsScripting
-///
-/// @see Con::registerType
-/// @{
-typedef const char* (*GetDataFunction)(void *dptr, EnumTable *tbl, BitSet32 flag);
-typedef void        (*SetDataFunction)(void *dptr, S32 argc, const char **argv, EnumTable *tbl, BitSet32 flag);
 /// @}
 
 /// This namespace contains the core of the console functionality.
@@ -236,8 +229,8 @@ namespace Con
    /// @see ConsoleLogger
    ///
    /// @{
-   void addConsumer(ConsumerCallback cb, void* userPtr = NULL);
-   void removeConsumer(ConsumerCallback cb, void* userPtr = NULL);
+   void addConsumer(ConsumerCallback cb, void* userPtr = nullptr);
+   void removeConsumer(ConsumerCallback cb, void* userPtr = nullptr);
    /// @}
 
    /// @name Miscellaneous
@@ -269,11 +262,13 @@ namespace Con
    /// @param  pDstPath    Pointer to string buffer to fill with absolute path.
    /// @param  size        Size of buffer pointed to by pDstPath.
    /// @param  pSrcPath    Original, possibly relative path.
-   bool expandPath( char* pDstPath, U32 size, const char* pSrcPath, const char* pWorkingDirectoryHint = NULL, const bool ensureTrailingSlash = false );
-   void collapsePath( char* pDstPath, U32 size, const char* pSrcPath, const char* pWorkingDirectoryHint = NULL );
+   bool expandPath( char* pDstPath, U32 size, const char* pSrcPath, const char* pWorkingDirectoryHint = nullptr, const bool ensureTrailingSlash = false );
+   void collapsePath( char* pDstPath, U32 size, const char* pSrcPath, const char* pWorkingDirectoryHint = nullptr );
    bool isBasePath( const char* SrcPath, const char* pBasePath );
    void ensureTrailingSlash( char* pDstPath, const char* pSrcPath );
    bool stripRepeatSlashes( char* pDstPath, const char* pSrcPath, S32 dstSize );
+
+   bool exec(const char* fileName, bool noCalls=false, bool inJournal=false);
    
    void addPathExpando( const char* pExpandoName, const char* pPath );
    void removePathExpando( const char* pExpandoName );
@@ -304,7 +299,7 @@ namespace Con
    /// @param  filename    Pointer to string buffer to fill with absolute path.
    /// @param  size        Size of buffer pointed to by filename.
    /// @param  src         Original, possibly relative script path.
-   bool expandScriptFilename(char *filename, U32 size, const char *src);
+   bool expandScriptFilename(char *filename, U32 size, const char *src, const char* cbName = nullptr);
    //
 
    StringTableEntry getModNameFromPath(const char *path);
@@ -349,7 +344,7 @@ namespace Con
    /// @param type    The type of the C++ variable; see the ConsoleDynamicTypes enum for a complete list.
    /// @param pointer Pointer to the variable.
    /// @see ConsoleDynamicTypes
-   bool addVariable(const char *name, S32 type, void *pointer, const char* desc = NULL);
+   bool addVariable(const char *name, S32 type, void *pointer, const char* desc = nullptr);
 
    /// Remove a console variable.
    ///
@@ -417,6 +412,8 @@ namespace Con
 
    /// @}
 
+   StringTableEntry getCurrentCodeBlockFullPath();
+
    /// @name Global Function Registration
    /// @{
 
@@ -452,6 +449,8 @@ namespace Con
    void addCommand(const char *nameSpace, const char *name,FloatCallback cb,  const char *usage, S32 minArgs, S32 maxArgs); ///< @copydoc addCommand(const char*, const char *, StringCallback, const char *, S32, S32)
    void addCommand(const char *nameSpace, const char *name,VoidCallback cb,   const char *usage, S32 minArgs, S32 maxArgs); ///< @copydoc addCommand(const char*, const char *, StringCallback, const char *, S32, S32)
    void addCommand(const char *nameSpace, const char *name,BoolCallback cb,   const char *usage, S32 minArgs, S32 maxArgs); ///< @copydoc addCommand(const char*, const char *, StringCallback, const char *, S32, S32)
+///<
+   void addCommand(const char *nameSpace, const char *name,ValueCallback cvc,   const char *usage, S32 minArgs, S32 maxArgs); 
    /// @}
 
    /// @name Special Purpose Registration
@@ -463,13 +462,10 @@ namespace Con
    ///
    /// @{
 
-   void markCommandGroup (const char * nsName, const char *name, const char* usage=NULL);
+   void markCommandGroup (const char * nsName, const char *name, const char* usage=nullptr);
    void beginCommandGroup(const char * nsName, const char *name, const char* usage);
    void endCommandGroup  (const char * nsName, const char *name);
-
-   /// @deprecated
-   void addOverload      (const char * nsName, const char *name, const char *altUsage);
-
+   
    /// @}
 
    /// @name Console Output
@@ -523,28 +519,6 @@ namespace Con
    /// Returns true when called from the main thread, false otherwise
    bool isMainThread();
 
-
-   /// @name Console Execution
-   ///
-   /// These are functions relating to the execution of script code.
-   ///
-   /// @{
-
-   /// Call a script function from C/C++ code.
-   ///
-   /// @param argc      Number of elements in the argv parameter
-   /// @param argv      A character string array containing the name of the function
-   ///                  to call followed by the arguments to that function.
-   /// @code
-   /// // Call a Torque script function called mAbs, having one parameter.
-   /// char* argv[] = {"abs", "-9"};
-   /// char* result = execute(2, argv);
-   /// @endcode
-   const char *execute(S32 argc, const char* argv[]);
-
-   /// @see execute(S32 argc, const char* argv[])
-   const char *executef(S32 argc, ...);
-
    /// Call a Torque Script member function of a SimObject from C/C++ code.
    /// @param object    Object on which to execute the method call.
    /// @param argc      Number of elements in the argv parameter (must be >2, see argv)
@@ -557,19 +531,73 @@ namespace Con
    /// char* argv[] = {"setMode", "", "2"};
    /// char* result = execute(mysimobject, 3, argv);
    /// @endcode
-   // [neo, 5/10/2007 - #3010]
-   // Added flag thisCallOnly to bypass dynamic method calls
-   const char *execute(SimObject *object, S32 argc, const char *argv[], bool thisCallOnly = false);
+   KorkApi::ConsoleValue execute(SimObject *object, S32 argc, KorkApi::ConsoleValue argv[], bool thisCallOnly = false);
 
-   /// @see execute(SimObject *, S32 argc, const char *argv[])
-   const char *executef(SimObject *, S32 argc, ...);
+   template <class... Ts>
+   inline constexpr bool all_console_values_v =
+      (std::is_same_v<std::decay_t<Ts>, KorkApi::ConsoleValue> && ...);
+
+   /// @name Console Execution
+   ///
+   /// These are functions relating to the execution of script code.
+   ///
+   /// @{
+
+   /// Call a script function from C/C++ code.
+   ///
+   /// @param argv      A character string array containing the name of the function
+   ///                  to call followed by the arguments to that function.
+   /// @code
+   /// // Call a Torque script function called mAbs, having one parameter.
+   /// char* argv[] = {"abs", "-9"};
+   /// char* result = execute(2, argv);
+   /// @endcode
+   KorkApi::ConsoleValue execute(S32 argc, KorkApi::ConsoleValue argv[]);
+
+   template <class... Args,
+             std::enable_if_t<all_console_values_v<Args...>, int> = 0>
+   KorkApi::ConsoleValue executef(const char* funcName, Args&&... args)
+   {
+      constexpr S32 argc = 1 + (S32)sizeof...(Args);
+
+      KorkApi::ConsoleValue argv[argc];
+
+      // argv[0] = function name
+      argv[0] = KorkApi::ConsoleValue::makeString(funcName);
+
+      // argv[1..] = provided ConsoleValue args
+      S32 i = 1;
+      ((argv[i++] = args), ...);
+
+      return execute(argc, argv);
+   }
+
+
+
+   /// @see execute(S32 argc, const char* argv[])
+   template <class... Args,
+             std::enable_if_t<all_console_values_v<Args...>, int> = 0>
+   KorkApi::ConsoleValue executef(SimObject* object, const char* funcName, Args&&... args)
+   {
+      constexpr S32 argc = 2 + (S32)sizeof...(Args);
+
+      KorkApi::ConsoleValue argv[argc];
+
+      argv[0] = KorkApi::ConsoleValue::makeString(funcName);
+      argv[1] = KorkApi::ConsoleValue::makeString(funcName);
+
+      S32 i = 2;
+      ((argv[i++] = args), ...);
+
+      return execute(object, argc, argv);
+   }
 
    /// Evaluate an arbitrary chunk of code.
    ///
    /// @param  string   Buffer containing code to execute.
    /// @param  echo     Should we echo the string to the console?
    /// @param  fileName Indicate what file this code is coming from; used in error reporting and such.
-   const char *evaluate(const char* string, bool echo = false, const char *fileName = NULL);
+   const char *evaluate(const char* string, bool echo = false, const char *fileName = nullptr);
 
    /// Evaluate an arbitrary line of script.
    ///
@@ -617,22 +645,7 @@ namespace Con
 
    /// @}
 
-   /// @name Dynamic Type System
-   /// @{
-
-   ///
-/*   void registerType( const char *typeName, S32 type, S32 size, GetDataFunction gdf, SetDataFunction sdf, bool isDatablockType = false );
-   void registerType( const char* typeName, S32 type, S32 size, bool isDatablockType = false );
-   void registerTypeGet( S32 type, GetDataFunction gdf );
-   void registerTypeSet( S32 type, SetDataFunction sdf );
-
-   const char *getTypeName(S32 type);
-   bool isDatablockType( S32 type ); */
-KorkApi::Vm* getVM();
-
-   void setData(S32 type, void *dptr, S32 index, S32 argc, const char **argv, const EnumTable *tbl = NULL, BitSet32 flag = 0);
-   const char *getData(S32 type, void *dptr, S32 index, const EnumTable *tbl = NULL, BitSet32 flag = 0);
-   /// @}
+   KorkApi::Vm* getVM();
 };
 
 extern void expandEscape(char *dest, const char *src);
@@ -660,6 +673,7 @@ public:
    FloatCallback fc;    ///< A function/method that returns a float.
    VoidCallback vc;     ///< A function/method that returns nothing.
    BoolCallback bc;     ///< A function/method that returns a bool.
+   ValueCallback cvc;     ///< A function/method that returns a bool.
    bool group;          ///< Indicates that this is a group marker.
    bool overload;       ///< Indicates that this is an overload marker.
    bool ns;             ///< Indicates that this is a namespace marker.
@@ -693,7 +707,7 @@ public:
    ///      // Resulting code
    ///      static const char* cExpandPath(SimObject *, S32, const char **argv);
    ///      static ConsoleConstructor
-   ///            gExpandPathobj(NULL,"ExpandPath", cExpandPath,
+   ///            gExpandPathobj(nullptr,"ExpandPath", cExpandPath,
    ///            "(string filePath)", 2, 2);
    ///      static const char* cExpandPath(SimObject *, S32 argc, const char **argv)
    ///      {
@@ -747,6 +761,7 @@ public:
    ConsoleConstructor(const char *className, const char *funcName, FloatCallback  ffunc, const char* usage,  S32 minArgs, S32 maxArgs);
    ConsoleConstructor(const char *className, const char *funcName, VoidCallback   vfunc, const char* usage,  S32 minArgs, S32 maxArgs);
    ConsoleConstructor(const char *className, const char *funcName, BoolCallback   bfunc, const char* usage,  S32 minArgs, S32 maxArgs);
+   ConsoleConstructor(const char *className, const char *funcName, ValueCallback   bfunc, const char* usage,  S32 minArgs, S32 maxArgs);
    /// @}
 
    /// @name Magic Console Constructors
@@ -791,7 +806,101 @@ public:
 #define conmethod_return_ConsoleBool        conmethod_return_bool
 #define conmethod_return_ConsoleString    conmethod_return_const char*
 
-#if !defined(TORQUE_SHIPPING)
+// Helper: const char*
+
+
+template <class R>
+struct ReturnAdapter
+{
+  template <class F, class... A>
+  static R call(F&& f, A&&... a)
+  {
+    return std::forward<F>(f)(std::forward<A>(a)...);
+  }
+};
+
+template <>
+struct ReturnAdapter<void>
+{
+  template <class F, class... A>
+  static void call(F&& f, A&&... a)
+  {
+    std::forward<F>(f)(std::forward<A>(a)...);
+    // no return needed
+  }
+};
+
+template <class R>
+struct FunctionCasterCStr
+{
+  using ImplFn = R (*)(SimObject*, KorkApi::Vm*, int, const char**);
+
+  template <ImplFn impl>
+  static R caster(SimObject* obj, KorkApi::Vm* vm, int argc, const char** argv)
+  {
+    if constexpr (std::is_void_v<R>)
+    {
+      ReturnAdapter<void>::call(impl, obj, vm, argc, argv);
+      return;
+    }
+    else
+    {
+      return ReturnAdapter<R>::call(impl, obj, vm, argc, argv);
+    }
+  }
+};
+
+template <class ClassT, class R>
+struct MethodCasterCStr
+{
+  using ImplFn = R (*)(ClassT*, KorkApi::Vm*, int, const char**);
+  using CasterFn = R (*)(SimObject*, KorkApi::Vm*, int, const char**);
+
+  static R thunk(SimObject* obj, KorkApi::Vm* vm, int argc, const char** argv, ImplFn impl)
+  {
+    auto* typed = static_cast<ClassT*>(obj);
+    if constexpr (std::is_void_v<R>)
+    {
+      ReturnAdapter<void>::call(impl, typed, vm, argc, argv);
+      return;
+    }
+    else
+    {
+      return ReturnAdapter<R>::call(impl, typed, vm, argc, argv);
+    }
+  }
+
+  template <ImplFn impl>
+  static R caster(SimObject* obj, KorkApi::Vm* vm, int argc, const char** argv)
+  {
+    return thunk(obj, vm, argc, argv, impl);
+  }
+};
+
+// Helper: ConsoleValue
+
+template <class ObjT>
+struct ValueCallbackAdapter
+{
+  using ImplFn =
+     KorkApi::ConsoleValue (*)(ObjT*, KorkApi::Vm* vmPtr, S32 argc, KorkApi::ConsoleValue argv[]);
+
+  template <ImplFn impl>
+  static KorkApi::ConsoleValue thunk(SimObject *obj, KorkApi::Vm* vmPtr, S32 argc, KorkApi::ConsoleValue argv[])
+  {
+    if constexpr (!std::is_same_v<ObjT, void>)
+    {
+      return impl(static_cast<ObjT*>(obj), vmPtr, argc, argv);
+    }
+    else
+    {
+      return impl(nullptr, vmPtr, argc, argv);
+    }
+  }
+};
+
+
+// Helper: Common
 
 // Console function return types
 #define ConsoleString   const char*
@@ -799,23 +908,35 @@ public:
 #define ConsoleFloat F32
 #define ConsoleVoid     void
 #define ConsoleBool     bool
+typedef KorkApi::ConsoleValue ConsoleValue;
 
 // Console function macros
 #  define ConsoleFunctionGroupBegin(groupName, usage) \
-      static ConsoleConstructor gConsoleFunctionGroup##groupName##__GroupBegin(NULL,#groupName,usage);
+      static ConsoleConstructor gConsoleFunctionGroup##groupName##__GroupBegin(nullptr,#groupName,usage);
 
-#  define ConsoleFunction(name,returnType,minArgs,maxArgs,usage1)                         \
-      static returnType c##name(SimObject *, KorkApi::Vm* vmPtr, S32, const char **argv);                     \
-      static ConsoleConstructor g##name##obj(NULL,#name,c##name,usage1,minArgs,maxArgs);  \
-      static returnType c##name(SimObject *, KorkApi::Vm* vmPtr, S32 argc, const char **argv)
+#define ConsoleFunction(name, returnType, minArgs, maxArgs, usage)                 \
+  static returnType c##name(SimObject*, KorkApi::Vm*, S32, const char**);           \
+  static ConsoleConstructor g##name##obj(                                          \
+      nullptr, #name,                                                             \
+      &FunctionCasterCStr<returnType>::template caster<c##name>,                  \
+      usage, minArgs, maxArgs);                                                    \
+  static returnType c##name(SimObject*, KorkApi::Vm* vmPtr, S32 argc, const char** argv)
+
+#define ConsoleFunctionValue(name, minArgs, maxArgs, usage)                        \
+  static KorkApi::ConsoleValue c##name(void*, KorkApi::Vm*, S32, KorkApi::ConsoleValue[]);                   \
+  static ConsoleConstructor g##name##obj(                                          \
+      nullptr, #name,                                                             \
+      &ValueCallbackAdapter<void>::template thunk<c##name>,                      \
+      usage, minArgs, maxArgs);                                                    \
+  static KorkApi::ConsoleValue c##name(void*, KorkApi::Vm* vmPtr, S32 argc, KorkApi::ConsoleValue argv[])
 
 #  define ConsoleFunctionWithDocs(name,returnType,minArgs,maxArgs,argString)              \
       static returnType c##name(SimObject *, KorkApi::Vm* vmPtr, S32, const char **argv);                     \
-     static ConsoleConstructor g##name##obj(NULL,#name,c##name,#argString,minArgs,maxArgs);      \
+     static ConsoleConstructor g##name##obj(nullptr,#name,c##name,#argString,minArgs,maxArgs);      \
       static returnType c##name(SimObject *, KorkApi::Vm* vmPtr, S32 argc, const char **argv)
 
 #  define ConsoleFunctionGroupEnd(groupName) \
-      static ConsoleConstructor gConsoleFunctionGroup##groupName##__GroupEnd(NULL,#groupName,NULL);
+      static ConsoleConstructor gConsoleFunctionGroup##groupName##__GroupEnd(nullptr,#groupName,nullptr);
 
 // Console method macros
 #  define ConsoleNamespace(className, usage) \
@@ -829,101 +950,62 @@ public:
 #  define ConsoleMethodRootGroupBeginWithDocs(className)
 #  define ConsoleMethodGroupBeginWithDocs(className, superclassName)
 
-#  define ConsoleMethod(className,name,returnType,minArgs,maxArgs,usage1)                                                 \
-      static inline returnType c##className##name(className *, KorkApi::Vm* vmPtr, S32, const char **argv);                                   \
-      static returnType c##className##name##caster(SimObject *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv) {                      \
-         AssertFatal( dynamic_cast<className*>( object ), "Object passed to " #name " is not a " #className "!" );        \
-         conmethod_return_##returnType ) c##className##name(static_cast<className*>(object),vmPtr, argc,argv);                   \
-      };                                                                                                                  \
-      static ConsoleConstructor className##name##obj(#className,#name,c##className##name##caster,usage1,minArgs,maxArgs); \
-      static inline returnType c##className##name(className *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv)
+#define ConsoleMethod(className, name, returnType, minArgs, maxArgs, usage)        \
+  static returnType c##className##name(className*, KorkApi::Vm*, S32, const char**);\
+  static ConsoleConstructor className##name##obj(                                  \
+      #className, #name,                                                          \
+      &MethodCasterCStr<className, returnType>::template caster<c##className##name>,\
+      usage, minArgs, maxArgs);                                                    \
+  static returnType c##className##name(className* object, KorkApi::Vm* vmPtr, S32 argc, const char** argv)
+
+#define ConsoleMethodValue(className, name, minArgs, maxArgs, usage)               \
+  static KorkApi::ConsoleValue c##className##name(className*, KorkApi::Vm*, S32, KorkApi::ConsoleValue[]);   \
+  static ConsoleConstructor className##name##obj(                                  \
+      #className, #name,                                                          \
+      &ValueCallbackAdapter<className>::template thunk<c##className##name>,      \
+      usage, minArgs, maxArgs);                                                    \
+  static KorkApi::ConsoleValue c##className##name(className *object, KorkApi::Vm* vmPtr, S32 argc, KorkApi::ConsoleValue argv[])
 
 #  define ConsoleMethodWithDoc(className,name,returnType,minArgs,maxArgs,usage1,desc)                                                 \
       static inline returnType c##className##name(className *, KorkApi::Vm* vmPtr, S32, const char **argv);                                   \
-      static returnType c##className##name##caster(SimObject *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv) {                      \
-         AssertFatal( dynamic_cast<className*>( object ), "Object passed to " #name " is not a " #className "!" );        \
-         conmethod_return_##returnType ) c##className##name(static_cast<className*>(object),vmPtr,argc,argv);                   \
-      };                                                                                                                  \
+     static ConsoleConstructor className##name##obj(                                      \
+         #className, #name,                                                               \
+         &MethodCasterCStr<className, returnType>::template caster<c##className##name>,   \
+         usage, minArgs, maxArgs);                                                                                                                   \
       static ConsoleConstructor className##name##obj(#className,#name,c##className##name##caster,usage1,minArgs,maxArgs); \
       static inline returnType c##className##name(className *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv)
 
 #  define ConsoleMethodWithDocs(className,name,returnType,minArgs,maxArgs,argString)                                  \
       static inline returnType c##className##name(className *, KorkApi::Vm* vmPtr, S32, const char **argv);                               \
-      static returnType c##className##name##caster(SimObject *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv) {                  \
-         AssertFatal( dynamic_cast<className*>( object ), "Object passed to " #name " is not a " #className "!" );    \
-         conmethod_return_##returnType ) c##className##name(static_cast<className*>(object),vmPtr,argc,argv);               \
-      };                                                                                                              \
+      static ConsoleConstructor className##name##obj(                                      \
+      #className, #name,                                                               \
+      &MethodCasterCStr<className, returnType>::template caster<c##className##name>,   \
+      usage, minArgs, maxArgs);                                                                                                             \
      static ConsoleConstructor className##name##obj(#className,#name,c##className##name##caster,#argString,minArgs,maxArgs); \
       static inline returnType c##className##name(className *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv)
 
 #  define ConsoleStaticMethod(className,name,returnType,minArgs,maxArgs,usage1)                       \
       static inline returnType c##className##name(KorkApi::Vm* vmPtr, S32, const char **);                                \
-      static returnType c##className##name##caster(SimObject *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv) {  \
-         conmethod_return_##returnType ) c##className##name(userPtr,argc,argv);                               \
-      };                                                                                              \
-      static ConsoleConstructor                                                                       \
-         className##name##obj(#className,#name,c##className##name##caster,usage1,minArgs,maxArgs);    \
+     static ConsoleConstructor className##name##obj(                                      \
+         #className, #name,                                                               \
+         &MethodCasterCStr<className, returnType>::template caster<c##className##name>,   \
+         usage, minArgs, maxArgs);   \
       static inline returnType c##className##name(KorkApi::Vm* vmPtr, S32 argc, const char **argv)
 
 #  define ConsoleStaticMethodWithDocs(className,name,returnType,minArgs,maxArgs,argString)            \
       static inline returnType c##className##name(KorkApi::Vm* vmPtr, S32, const char **);                                \
-      static returnType c##className##name##caster(SimObject *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv) {  \
-         conmethod_return_##returnType ) c##className##name(userPtr,argc,argv);                               \
-      };                                                                                              \
-      static ConsoleConstructor                                                                       \
-     className##name##obj(#className,#name,c##className##name##caster,#argString,minArgs,maxArgs);        \
+  static ConsoleConstructor className##name##obj(                                      \
+      #className, #name,                                                               \
+      &MethodCasterCStr<className, returnType>::template caster<c##className##name>,   \
+      usage, minArgs, maxArgs);  \
       static inline returnType c##className##name(KorkApi::Vm* vmPtr, S32 argc, const char **argv)
 
 #  define ConsoleMethodGroupEnd(className, groupName) \
-      static ConsoleConstructor className##groupName##__GroupEnd(#className,#groupName,NULL);
+      static ConsoleConstructor className##groupName##__GroupEnd(#className,#groupName,nullptr);
 
 #  define ConsoleMethodRootGroupEndWithDocs(className)
 #  define ConsoleMethodGroupEndWithDocs(className)
 
-#else
-
-// These do nothing if we don't want doc information.
-#  define ConsoleFunctionGroupBegin(groupName, usage)
-#  define ConsoleFunctionGroupEnd(groupName)
-#  define ConsoleNamespace(className, usage)
-#  define ConsoleMethodGroupBegin(className, groupName, usage)
-#  define ConsoleMethodGroupEnd(className, groupName)
-
-// These are identical to what's above, we just want to null out the usage strings.
-#  define ConsoleFunction(name,returnType,minArgs,maxArgs,usage1)                   \
-      static returnType c##name(SimObject *, KorkApi::Vm* vmPtr, S32, const char **);                   \
-      static ConsoleConstructor g##name##obj(NULL,#name,c##name,"",minArgs,maxArgs);\
-      static returnType c##name(SimObject *, KorkApi::Vm* vmPtr, S32 argc, const char **argv)
-
-#  define ConsoleMethod(className,name,returnType,minArgs,maxArgs,usage1)                             \
-      static inline returnType c##className##name(className *, KorkApi::Vm* vmPtr, S32, const char **argv);               \
-      static returnType c##className##name##caster(SimObject *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv) {  \
-         conmethod_return_##returnType ) c##className##name(static_cast<className*>(object),vmPtr,argc,argv);              \
-      };                                                                                              \
-      static ConsoleConstructor                                                                       \
-         className##name##obj(#className,#name,c##className##name##caster,"",minArgs,maxArgs);        \
-      static inline returnType c##className##name(className *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv)
-
-#  define ConsoleMethodWithDoc(className,name,returnType,minArgs,maxArgs,usage1,doc)                      \
-static inline returnType c##className##name(className *, KorkApi::Vm* vmPtr, S32, const char **argv);               \
-static returnType c##className##name##caster(SimObject *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv) {  \
-conmethod_return_##returnType ) c##className##name(static_cast<className*>(object), userPtr, argc,argv);              \
-};                                                                                              \
-static ConsoleConstructor                                                                       \
-className##name##obj(#className,#name,c##className##name##caster,"",minArgs,maxArgs);        \
-static inline returnType c##className##name(className *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv)
-
-#  define ConsoleStaticMethod(className,name,returnType,minArgs,maxArgs,usage1)                       \
-      static inline returnType c##className##name(KorkApi::Vm* vmPtr, S32, const char **);                                \
-      static returnType c##className##name##caster(SimObject *object, KorkApi::Vm* vmPtr, S32 argc, const char **argv) {  \
-         conmethod_return_##returnType ) c##className##name(userPtr, argc,argv);                                                        \
-      };                                                                                              \
-      static ConsoleConstructor                                                                       \
-         className##name##obj(#className,#name,c##className##name##caster,"",minArgs,maxArgs);        \
-      static inline returnType c##className##name(KorkApi::Vm* vmPtr, S32 argc, const char **argv)
-
-
-#endif
 
 /// @}
 
