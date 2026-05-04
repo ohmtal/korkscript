@@ -64,6 +64,8 @@ namespace Platform
     void cprintf(const char* str);
 
     /// File IO.
+    StringTableEntry getWorkingDirectory();
+    bool setWorkingDirectory(StringTableEntry newDir);
     StringTableEntry getCurrentDirectory();
     bool setCurrentDirectory(StringTableEntry newDir);
     StringTableEntry getTemporaryDirectory();
@@ -97,4 +99,3 @@ namespace Platform
     bool pathCopy(const char *fromName, const char *toName, bool nooverwrite = true);
     StringTableEntry osGetTemporaryDirectory();
 };
-

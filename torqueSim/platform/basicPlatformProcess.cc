@@ -13,12 +13,16 @@
 #include "platform/threads/thread.h"
 #include "platform/threads/mutex.h"
 #include "platform/threads/semaphore.h"
+#include "core/stringTable.h"
 #include "core/safeDelete.h"
 
+#include <mutex>
+#include <string>
+
+#ifdef TORQUE_USE_STD_FILESYSTEM
 #include <filesystem>
 namespace fs = std::filesystem;
-
-#include <mutex>
+#endif
 
 namespace Platform
 {
@@ -111,14 +115,46 @@ void outputDebugString(const char *string)
 }
 
 /// File IO.
+StringTableEntry getWorkingDirectory()
+{
+#ifdef TORQUE_USE_STD_FILESYSTEM
+   static std::string sWorkingDirectory;
+
+   std::error_code ec;
+   fs::path cwd = fs::current_path(ec);
+   if (ec)
+      return nullptr;
+
+   sWorkingDirectory = cwd.generic_string();
+   return StringTable->insert(sWorkingDirectory.c_str());
+#else
+   return nullptr;
+#endif
+}
+
+bool setWorkingDirectory(StringTableEntry newDir)
+{
+#ifdef TORQUE_USE_STD_FILESYSTEM
+   if (newDir == nullptr || *newDir == '\0')
+      return false;
+
+   std::error_code ec;
+   fs::current_path(fs::path(newDir), ec);
+   return !ec;
+#else
+   (void)newDir;
+   return false;
+#endif
+}
+
 StringTableEntry getCurrentDirectory()
 {
-   return nullptr;
+   return getWorkingDirectory();
 }
 
 bool setCurrentDirectory(StringTableEntry newDir)
 {
-   return false;
+   return setWorkingDirectory(newDir);
 }
 
 StringTableEntry getExecutableName()
@@ -197,4 +233,3 @@ bool pathCopy(const char *fromName, const char *toName, bool nooverwrite)
 }
 
 }
-
