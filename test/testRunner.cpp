@@ -15,6 +15,8 @@
 #include "sim/dynamicTypes.h"
 #include "core/fileStream.h"
 #include "core/stringUnit.h"
+#define CATCH_CONFIG_RUNNER
+#include <catch2/catch.hpp>
 
 S32 gReturnCode = 0;
 U32 gNumPasses = 0;
@@ -508,37 +510,80 @@ ConsoleFunction(readFiberLocalVariable, const char*, 3, 3, "fiberId, localVarNam
 
 void MyLogger(U32 level, const char *consoleLine, void*)
 {
+   (void)level;
 	printf("%s\n", consoleLine);
 }
 
-int main(int argc, char **argv)
+static void initRuntime()
 {
-	Con::init();
+   Con::init();
    Sim::init();
-	Con::addConsumer(MyLogger, nullptr);
+   Con::addConsumer(MyLogger, nullptr);
+}
 
-   if (argc < 2)
-   {
-      Con::printf("Not enough args\n");
-      return 1;
-   }
+static void shutdownRuntime()
+{
+   Sim::shutdown();
+   if (Con::isActive())
+      Con::shutdown();
+}
 
+static bool isCatch2Mode(int argc, char** argv)
+{
+   return argc >= 2 &&
+      (strcmp(argv[1], "catch2") == 0 || strcmp(argv[1], "--catch2") == 0);
+}
+
+static int runCatch2Tests(int argc, char** argv)
+{
+   Catch::Session session;
+
+   initRuntime();
+   const int exitCode = session.run(argc, argv);
+   shutdownRuntime();
+
+   return exitCode;
+}
+
+static int runScriptTests(const char* path)
+{
    FileStream fs;
-   if (!fs.open(argv[1], FileStream::Read))
+   if (!fs.open(path, FileStream::Read))
    {
-      Con::printf("Error loading file %s\n", argv[1]);
+      Con::printf("Error loading file %s\n", path);
       return 1;
    }
    
-   char* data = new char[fs.getStreamSize()+1];
+   char* data = new char[fs.getStreamSize() + 1];
    fs.read(fs.getStreamSize(), data);
    data[fs.getStreamSize()] = '\0';
    
-   const char* res = Con::evaluate(data);
+   (void)Con::evaluate(data);
 
    delete[] data;
 
    Con::printf("Tests passed: %i, failed: %i\n", gNumPasses, gNumFails);
 
-	return gReturnCode;
+   return gReturnCode;
+}
+
+int main(int argc, char **argv)
+{
+   if (isCatch2Mode(argc, argv))
+   {
+      return runCatch2Tests(argc - 1, argv + 1);
+   }
+
+   initRuntime();
+
+   if (argc < 2)
+   {
+      Con::printf("Not enough args\n");
+      shutdownRuntime();
+      return 1;
+   }
+
+   const int result = runScriptTests(argv[1]);
+   shutdownRuntime();
+   return result;
 }

@@ -167,7 +167,7 @@ template<class T, class B,  template<class...> class VEC> struct FreeListStruct
       T* item;
       if (mFreeItems.size() > 0)
       {
-         index = mFreeItems.last();
+         index = mFreeItems.back();
          mFreeItems.pop_back();
          item = &mItems[index];
          item->mAllocNumber = index+1;
@@ -176,7 +176,7 @@ template<class T, class B,  template<class...> class VEC> struct FreeListStruct
       {
          mItems.push_back(T());
          mItems.reserve(FreeListHandle::getReserveSize(*this));
-         item = &mItems.last();
+         item = &mItems.back();
          item->mAllocNumber = mItems.size();
       }
       item->mGeneration++;
