@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: ./tools/build_csprintast.sh [build_dir]
-# Defaults to "build" if not provided.
+# Usage: ./tools/build_testrunner.sh [build_dir]
+# Defaults to "test_build" if not provided.
 
-BUILD_DIR="${1:-build}"
+BUILD_DIR="${1:-${CURRENT_BUILD_DIR:-test_build}}"
 echo "BUILD DIR IS ${BUILD_DIR}"
-CS_BIN_NAME="${CS_BIN_NAME:-csprintast}"
 
 cpu_count() {
   if command -v getconf >/dev/null 2>&1; then
@@ -19,7 +18,5 @@ cpu_count() {
 }
 
 mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
-
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -- -j"$(cpu_count)"
+cmake -S . -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$BUILD_DIR" -- -j"$(cpu_count)"

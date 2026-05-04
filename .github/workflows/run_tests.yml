@@ -75,3 +75,21 @@ jobs:
       - name: Run Generic test script
         run: |
           ./tools/run_test_scripts.sh
+
+  catch2-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
+
+      - name: Build and run Catch2 tests
+        run: |
+          ./tools/check_catch2_tests.sh
