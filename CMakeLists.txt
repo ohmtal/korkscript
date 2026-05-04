@@ -153,6 +153,12 @@ file(GLOB KS_CATCH2_API_TEST_SRCS
 	test/api_tests/*.cxx
 )
 
+file(GLOB KS_TORQUESIM_TEST_SRCS
+	torqueSim/test/*.cc
+	torqueSim/test/*.cpp
+	torqueSim/test/*.cxx
+)
+
 
 set(TORQUESIM_BRIDGE_SRCS )
 set(ENABLE_WASM3_BRIDGE OFF)
@@ -243,7 +249,7 @@ target_link_libraries(torquetest PRIVATE ${KS_LINK_LIBS})
 add_executable(testrunner ${TEST_RUNNER_SRCS})
 target_compile_definitions(testrunner PRIVATE HAVE_TORQUE_CONFIG_H)
 target_link_libraries(testrunner PRIVATE ${KS_LINK_LIBS})
-target_sources(testrunner PRIVATE ${KS_CATCH2_ENGINE_TEST_SRCS} ${KS_CATCH2_API_TEST_SRCS})
+target_sources(testrunner PRIVATE ${KS_CATCH2_ENGINE_TEST_SRCS} ${KS_CATCH2_API_TEST_SRCS} ${KS_TORQUESIM_TEST_SRCS})
 set_source_files_properties(ext/catch2/catch.cpp PROPERTIES COMPILE_DEFINITIONS CATCH_AMALGAMATED_CUSTOM_MAIN)
 
 target_include_directories(torquetest PRIVATE ./torqueSim)
