@@ -505,6 +505,7 @@ TEST_CASE("SimFieldDictionary basic behavior", "[SimFieldDictionary]") {
 TEST_CASE("Registered fields and field access controls", "[SimObject][Fields]") {
    TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("fieldObj"));
 
+   // Enable both field paths so the test can verify the static and dynamic branches independently.
    obj->getVMObject()->flags |= KorkApi::ModStaticFields | KorkApi::ModDynamicFields;
 
    obj->setDataField(StringTable->insert("testValue"), nullptr, "37");
@@ -650,6 +651,7 @@ TEST_CASE("Namespace linking and unlinking", "[SimObject][Namespaces]") {
    Con::evaluate((std::string("signal ") + otherClassNsName + "::otherClassSignal();").c_str());
    Con::evaluate((std::string("signal ") + otherSuperNsName + "::otherSuperSignal();").c_str());
 
+   // Rebinding the class and super namespaces should update the visible signal set in each step.
    obj->setSuperClassNamespace(superNsName);
    obj->setClassNamespace(classNsName);
    REQUIRE(obj->getClassNamespace() == classNsName);
@@ -813,6 +815,7 @@ TEST_CASE("SimSet container operations and traversal", "[SimSet]") {
    SimSet* nested = createRegisteredObject<SimSet>(uniqueName("nested"));
 
    REQUIRE(set->empty());
+   // Build a mixed tree so the test can exercise ordering, nested traversal, and child lookup together.
    set->addObject(first);
    set->addObject(middle);
    set->addObject(last);
@@ -828,6 +831,7 @@ TEST_CASE("SimSet container operations and traversal", "[SimSet]") {
    REQUIRE(set->containsType<SimSet>());
    REQUIRE(set->containsType<TestSimObject>());
 
+   // The iterator should walk direct members and then descend into the nested set.
    std::vector<SimObject*> iterated;
    for (SimSetIterator itr(set); *itr; ++itr)
       iterated.push_back(*itr);
@@ -868,6 +872,7 @@ TEST_CASE("SimSet container operations and traversal", "[SimSet]") {
    const std::string nestedPath = std::string(nested->getName()) + "/" + child->getName();
    REQUIRE(set->findObject(nestedPath.c_str()) == child);
 
+   // This is the recursion check: without the deep flag, nested children are skipped.
    REQUIRE(first->mConsoleCallCount == 0);
    REQUIRE(child->mConsoleCallCount == 0);
 
@@ -883,6 +888,7 @@ TEST_CASE("SimSet container operations and traversal", "[SimSet]") {
    REQUIRE(last->mConsoleCallCount == 2);
    REQUIRE(child->mConsoleCallCount == 1);
 
+   // `write()` should emit the set and its nested contents in the same structural shape.
    char buffer[4096] = {};
    MemStream stream(sizeof(buffer), buffer, true, true);
    set->write(stream, 0);
@@ -940,6 +946,7 @@ TEST_CASE("SimSet and SimGroup destruction semantics", "[SimSet][SimGroup]") {
    set->addObject(setMember);
    group->addObject(groupMember);
 
+   // A SimSet only stores membership; a SimGroup owns direct children and deletes them with itself.
    set->deleteObject();
    REQUIRE(trackedSetMember != nullptr);
    REQUIRE(Sim::findObject(setMember->getId()) == setMember);
@@ -1023,6 +1030,7 @@ TEST_CASE("SimDataBlock serialization and modified-key behavior", "[SimDataBlock
    SimDataBlock* outOfRangeBlock = createRegisteredObjectWithId<SimDataBlock>(uniqueName("outOfRangeBlock"), DataBlockObjectIdLast + 100);
    SimDataBlockGroup* dataBlockGroup = dynamic_cast<SimDataBlockGroup*>(Sim::getDataBlockGroup());
 
+   // The in-range ids participate in normal datablock ordering, while the out-of-range id exercises the alternate path.
    REQUIRE_FALSE(baseBlock->isClientOnly());
    REQUIRE_FALSE(orderedBlock->isClientOnly());
    REQUIRE(outOfRangeBlock->isClientOnly());
@@ -1059,7 +1067,7 @@ TEST_CASE("SimDataBlock serialization and modified-key behavior", "[SimDataBlock
    std::string packedOutput = packedBuffer;
    REQUIRE(packedOutput.find("new SimDataBlock(") != std::string::npos);
 
-   // `write()` is plain script serialization. The network-specific path is `packData` / `unpackData`.
+   // `write()` is plain script serialization. `packData` / `unpackData` cover the transport-specific path.
    REQUIRE(baseBlock->preload(true, packedBuffer));
    baseBlock->packData(nullptr);
    baseBlock->unpackData(nullptr);
