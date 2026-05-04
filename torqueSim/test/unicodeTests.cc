@@ -141,10 +141,14 @@ TEST_CASE("Unicode BOM helpers identify supported encodings", "[unicode]") {
    REQUIRE(std::string(bomName) == "UTF32");
 
    REQUIRE_FALSE(isValidUTF8BOM(invalidBom, nullptr));
+   REQUIRE_FALSE(isValidUTF8BOM(invalidBom, &bomName));
+   REQUIRE(bomName == nullptr);
 
    char* stripped = nullptr;
    REQUIRE(chompUTF8BOM(reinterpret_cast<const char*>(utf8Bom), &stripped));
    REQUIRE(stripped == reinterpret_cast<char*>(utf8Bom) + 3);
+   REQUIRE_FALSE(chompUTF8BOM(nullptr, &stripped));
+   REQUIRE_FALSE(chompUTF8BOM(reinterpret_cast<const char*>(utf8Bom), nullptr));
 }
 
 TEST_CASE("Unicode getNthCodepoint advances by code points rather than bytes", "[unicode]") {

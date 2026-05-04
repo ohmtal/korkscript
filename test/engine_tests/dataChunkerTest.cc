@@ -1,5 +1,6 @@
 //-----------------------------------------------------------------------------
 // Copyright (c) 2023 tgemit contributors.
+// Copyright (c) 2026 korkscript contributors.
 // See AUTHORS file and git repository for contributor information.
 //
 // SPDX-License-Identifier: MIT

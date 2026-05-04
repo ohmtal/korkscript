@@ -626,6 +626,9 @@ const UTF8* getNthCodepoint(const UTF8 *unistring, const U32 n)
 
 bool chompUTF8BOM( const char *inString, char **outStringPtr )
 {
+   if (!inString || !outStringPtr)
+      return false;
+
    *outStringPtr = const_cast<char *>( inString );
 
    U8 bom[4];
@@ -647,6 +650,9 @@ bool chompUTF8BOM( const char *inString, char **outStringPtr )
 
 bool isValidUTF8BOM( U8 bom[4], const char** outName )
 {
+   if (outName)
+      *outName = nullptr;
+
    // Is it a BOM?
    if( bom[0] == 0 )
    {
@@ -695,8 +701,6 @@ bool isValidUTF8BOM( U8 bom[4], const char** outName )
       return true;
    }
    
-   *outName = nullptr;
-
    // Don't print out an error message here, because it will try this with
    // every script. -pw
    return false;
