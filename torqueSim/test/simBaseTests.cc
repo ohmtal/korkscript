@@ -25,12 +25,17 @@ class TestSimObject : public SimObject
 
 public:
    S32 mTestValue;
+   S32 mTestArray[2];
    U32 mOnAddCount;
    U32 mOnRemoveCount;
    U32 mOnGroupAddCount;
    U32 mOnGroupRemoveCount;
    U32 mOnNameChangeCount;
    U32 mOnStaticModifiedCount;
+   U32 mOnInspectPreApplyCount;
+   U32 mOnInspectPostApplyCount;
+   U32 mOnEditorEnableCount;
+   U32 mOnEditorDisableCount;
    U32 mOnDeleteNotifyCount;
    U32 mConsoleCallCount;
    U32 mSignalDispatchCount;
@@ -44,12 +49,17 @@ public:
 
    TestSimObject()
       : mTestValue(0),
+        mTestArray{0, 0},
         mOnAddCount(0),
         mOnRemoveCount(0),
         mOnGroupAddCount(0),
         mOnGroupRemoveCount(0),
         mOnNameChangeCount(0),
         mOnStaticModifiedCount(0),
+        mOnInspectPreApplyCount(0),
+        mOnInspectPostApplyCount(0),
+        mOnEditorEnableCount(0),
+        mOnEditorDisableCount(0),
         mOnDeleteNotifyCount(0),
         mConsoleCallCount(0),
         mSignalDispatchCount(0),
@@ -61,6 +71,7 @@ public:
    {
       Parent::initPersistFields();
       addField("testValue", TypeS32, Offset(mTestValue, TestSimObject));
+      addField("testArray", TypeS32, Offset(mTestArray, TestSimObject), 2);
    }
 
    bool onAdd() override
@@ -100,6 +111,30 @@ public:
       mLastStaticSlot = slotName ? slotName : "";
       mLastStaticValue = newValue ? newValue : "";
       Parent::onStaticModified(slotName, newValue);
+   }
+
+   void inspectPreApply() override
+   {
+      ++mOnInspectPreApplyCount;
+      Parent::inspectPreApply();
+   }
+
+   void inspectPostApply() override
+   {
+      ++mOnInspectPostApplyCount;
+      Parent::inspectPostApply();
+   }
+
+   void onEditorEnable() override
+   {
+      ++mOnEditorEnableCount;
+      Parent::onEditorEnable();
+   }
+
+   void onEditorDisable() override
+   {
+      ++mOnEditorDisableCount;
+      Parent::onEditorDisable();
    }
 
    void onDeleteNotify(SimObject* object) override
@@ -155,6 +190,12 @@ static void captureConsoleLine(U32, const char* consoleLine, void* userPtr)
 static std::string uniqueName(const char* prefix)
 {
    return std::string(prefix) + "_" + std::to_string(gNextTestObjectId.fetch_add(1));
+}
+
+static std::string evalConsole(const std::string& script)
+{
+   const char* result = Con::evaluate(script.c_str());
+   return result ? result : "";
 }
 
 template <class T, class... Args>
@@ -281,6 +322,145 @@ TEST_CASE("SimObject fields and copy helpers", "[SimObject]") {
    target->deleteObject();
    copied->deleteObject();
    source->deleteObject();
+}
+
+TEST_CASE("SimObject reflection and field enumeration", "[SimObject][Console]") {
+   const std::string objectName = uniqueName("reflectObj");
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(objectName);
+
+   obj->getVMObject()->flags |= KorkApi::ModStaticFields | KorkApi::ModDynamicFields;
+   obj->setInternalName("reflectInternal");
+   obj->setProgenitorFile("test/simBaseTests.cc");
+   obj->setDataField(StringTable->insert("testValue"), nullptr, "37");
+   evalConsole(objectName + ".testArray[1] = \"41\";");
+   obj->setDataField(StringTable->insert("testArray"), "1", "41");
+   obj->setDataFieldDynamic(StringTable->insert("dynamicField"), nullptr, "dynamicValue", TypeString);
+   obj->setDataFieldDynamic(StringTable->insert("dynamicArray"), "1", "dynamicArrayValue", TypeString);
+
+   REQUIRE(obj->getDataField(StringTable->insert("testArray"), "1") != nullptr);
+   REQUIRE(std::string(obj->getDataField(StringTable->insert("testArray"), "1")) == "41");
+   REQUIRE(obj->getDataFieldType(StringTable->insert("testArray"), "1") == TypeS32);
+   REQUIRE(std::string(obj->getDataFieldDynamic(StringTable->insert("dynamicArray"), "1")) == "dynamicArrayValue");
+
+   const std::string fieldCountExpr = objectName + ".getFieldCount();";
+   const S32 fieldCount = dAtoi(evalConsole(fieldCountExpr).c_str());
+   REQUIRE(fieldCount > 0);
+
+   std::vector<std::string> fieldNames;
+   for (S32 i = 0; i < fieldCount; ++i)
+      fieldNames.push_back(evalConsole(objectName + ".getField(" + std::to_string(i) + ");"));
+   REQUIRE(std::find(fieldNames.begin(), fieldNames.end(), "testValue") != fieldNames.end());
+   REQUIRE(std::find(fieldNames.begin(), fieldNames.end(), "testArray") != fieldNames.end());
+
+   const S32 dynamicCount = dAtoi(evalConsole(objectName + ".getDynamicFieldCount();").c_str());
+   REQUIRE(dynamicCount >= 2);
+
+   std::vector<std::string> dynamicFields;
+   for (S32 i = 0; i < dynamicCount; ++i)
+      dynamicFields.push_back(evalConsole(objectName + ".getDynamicField(" + std::to_string(i) + ");"));
+   REQUIRE(std::any_of(dynamicFields.begin(), dynamicFields.end(), [](const std::string& line) {
+      return line.find("dynamicField") != std::string::npos && line.find("dynamicValue") != std::string::npos;
+   }));
+   REQUIRE(std::any_of(dynamicFields.begin(), dynamicFields.end(), [](const std::string& line) {
+      return line.find("dynamicArray1") != std::string::npos && line.find("dynamicArrayValue") != std::string::npos;
+   }));
+
+   REQUIRE(evalConsole(objectName + ".getClassName();") == "TestSimObject");
+   REQUIRE(evalConsole(objectName + ".getInternalName();") == "reflectInternal");
+   REQUIRE(evalConsole(objectName + ".getProgenitorFile();") == "test/simBaseTests.cc");
+   REQUIRE(evalConsole(objectName + ".getType();") == "0");
+   REQUIRE(evalConsole(objectName + ".isMethod(\"bumpCounter\");") == "1");
+   REQUIRE(evalConsole(objectName + ".isMethod(\"nope\");") == "0");
+   REQUIRE(obj->getMethodNamespace("bumpCounter") != StringTable->EmptyString);
+   REQUIRE(evalConsole(objectName + ".getMethodNamespace(\"bumpCounter\");") == "1");
+
+   evalConsole(objectName + ".call(\"bumpCounter\");");
+   REQUIRE(obj->mConsoleCallCount == 1);
+
+   obj->deleteObject();
+}
+
+TEST_CASE("SimObject write and save behavior", "[SimObject][Serialization]") {
+   SimGroup* group = createRegisteredObject<SimGroup>(uniqueName("writeGroup"));
+   const std::string objectName = uniqueName("writeObj");
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(objectName);
+   group->addObject(obj);
+
+   obj->getVMObject()->flags |= KorkApi::ModStaticFields | KorkApi::ModDynamicFields;
+   obj->setInternalName("writeInternal");
+   obj->setDataField(StringTable->insert("testValue"), nullptr, "");
+   evalConsole(objectName + ".testArray[0] = \"12\";");
+   obj->setDataField(StringTable->insert("testArray"), "0", "12");
+   obj->setDataFieldDynamic(StringTable->insert("dynamicField"), nullptr, "writtenValue", TypeString);
+   obj->setCanSaveDynamicFields(false);
+   REQUIRE_FALSE(obj->getCanSaveDynamicFields());
+
+   char buffer[8192] = {};
+   MemStream stream(sizeof(buffer), buffer, true, true);
+   obj->write(stream, 0);
+   std::string output = buffer;
+   REQUIRE(output.find("new TestSimObject(") != std::string::npos);
+   REQUIRE(output.find("parentGroup") == std::string::npos);
+   REQUIRE(output.find("testArray[0]") != std::string::npos);
+   REQUIRE(output.find("dynamicField") == std::string::npos);
+
+   obj->setCanSaveDynamicFields(true);
+   REQUIRE(obj->getCanSaveDynamicFields());
+   std::memset(buffer, 0, sizeof(buffer));
+   MemStream stream2(sizeof(buffer), buffer, true, true);
+   obj->write(stream2, 0);
+   output = buffer;
+   REQUIRE(output.find("dynamicField") != std::string::npos);
+   REQUIRE(output.find("writtenValue") != std::string::npos);
+   REQUIRE(output.find("parentGroup") == std::string::npos);
+   REQUIRE(output.find("testArray[0]") != std::string::npos);
+
+   obj->deleteObject();
+   group->deleteObject();
+}
+
+TEST_CASE("SimObject lifecycle hooks and callback guard", "[SimObject]") {
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("hookObj"));
+
+   obj->inspectPreApply();
+   obj->inspectPostApply();
+   obj->onEditorEnable();
+   obj->onEditorDisable();
+   REQUIRE(obj->mOnInspectPreApplyCount == 1);
+   REQUIRE(obj->mOnInspectPostApplyCount == 1);
+   REQUIRE(obj->mOnEditorEnableCount == 1);
+   REQUIRE(obj->mOnEditorDisableCount == 1);
+
+   REQUIRE(obj->getScriptCallbackGuard() == 0);
+   obj->pushScriptCallbackGuard();
+   obj->pushScriptCallbackGuard();
+   REQUIRE(obj->getScriptCallbackGuard() == 2);
+   obj->popScriptCallbackGuard();
+   obj->popScriptCallbackGuard();
+   REQUIRE(obj->getScriptCallbackGuard() == 0);
+
+   obj->deleteObject();
+}
+
+TEST_CASE("SimObject notification cleanup edge cases", "[SimObject][Notifications]") {
+   TestSimObject* target = createRegisteredObject<TestSimObject>(uniqueName("cleanupTarget"));
+   TestSimObject* watcher = createRegisteredObject<TestSimObject>(uniqueName("cleanupWatcher"));
+
+   SimObject* trackedTarget = target;
+   target->registerReference(&trackedTarget);
+   target->unregisterReference(&trackedTarget);
+   target->deleteObject();
+   REQUIRE(trackedTarget == target);
+
+   TestSimObject* notifyTarget = createRegisteredObject<TestSimObject>(uniqueName("clearTarget"));
+   TestSimObject* notifyWatcher = createRegisteredObject<TestSimObject>(uniqueName("clearWatcher"));
+   notifyWatcher->deleteNotify(notifyTarget);
+   notifyWatcher->clearAllNotifications();
+   notifyTarget->deleteObject();
+   REQUIRE(notifyWatcher->mOnDeleteNotifyCount == 0);
+
+   watcher->deleteObject();
+   notifyWatcher->deleteObject();
 }
 
 TEST_CASE("SimFieldDictionary basic behavior", "[SimFieldDictionary]") {
@@ -510,6 +690,44 @@ TEST_CASE("SimConsoleEvent copies payload and invokes object methods", "[SimCons
    obj->deleteObject();
 }
 
+TEST_CASE("SimObject scheduling and event utilities", "[SimObject][Events]") {
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("scheduleObj"));
+   const std::string objectName = std::string(obj->getName());
+   const U32 startTime = Sim::getCurrentTime();
+
+   const std::string scheduleExpr = objectName + ".schedule(5, \"recordPayload\", \"canceledPayload\");";
+   const U32 eventId = dAtoi(evalConsole(scheduleExpr).c_str());
+   REQUIRE(eventId != 0);
+   REQUIRE(Sim::isEventPending(eventId));
+   REQUIRE(Sim::getScheduleDuration(eventId) == 5);
+   REQUIRE(Sim::getEventTimeLeft(eventId) == 5);
+   REQUIRE(Sim::getTimeSinceStart(eventId) == 0);
+   REQUIRE(dAtoi(evalConsole("getSimTime();").c_str()) == static_cast<S32>(Sim::getCurrentTime()));
+
+   Sim::advanceToTime(startTime + 2);
+   REQUIRE(Sim::isEventPending(eventId));
+   REQUIRE(Sim::getEventTimeLeft(eventId) == 3);
+   REQUIRE(Sim::getTimeSinceStart(eventId) == 2);
+   REQUIRE(obj->mConsoleCallCount == 0);
+
+   evalConsole("cancel(" + std::to_string(eventId) + ");");
+   REQUIRE_FALSE(Sim::isEventPending(eventId));
+   REQUIRE(Sim::getEventTimeLeft(eventId) == 0);
+   REQUIRE(Sim::getTimeSinceStart(eventId) == 0);
+
+   const std::string execScheduleExpr = objectName + ".schedule(3, \"recordPayload\", \"scheduledPayload\");";
+   const U32 execEventId = dAtoi(evalConsole(execScheduleExpr).c_str());
+   REQUIRE(execEventId != 0);
+   REQUIRE(Sim::isEventPending(execEventId));
+
+   Sim::advanceToTime(startTime + 5);
+   REQUIRE_FALSE(Sim::isEventPending(execEventId));
+   REQUIRE(obj->mConsoleCallCount == 1);
+   REQUIRE(obj->mLastPayload == "scheduledPayload");
+
+   obj->deleteObject();
+}
+
 TEST_CASE("SimObject set membership helpers", "[SimObject][SimSet]") {
    SimSet* set = createRegisteredObject<SimSet>(uniqueName("set"));
    TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("member"));
@@ -561,6 +779,29 @@ TEST_CASE("SimSet and SimGroup membership semantics", "[SimSet][SimGroup]") {
    set->deleteObject();
    groupA->deleteObject();
    groupB->deleteObject();
+}
+
+TEST_CASE("SimSet and SimGroup edge cases", "[SimSet][SimGroup]") {
+   SimSet* set = createRegisteredObject<SimSet>(uniqueName("edgeSet"));
+   SimGroup* group = createRegisteredObject<SimGroup>(uniqueName("edgeGroup"));
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("edgeMember"));
+
+   REQUIRE_FALSE(set->reOrder(obj, nullptr));
+   set->removeObject(obj);
+   REQUIRE(set->size() == 0);
+   set->popObject();
+   REQUIRE(set->size() == 0);
+
+   group->addObject(group);
+   REQUIRE(group->size() == 0);
+   REQUIRE(group->getGroup() == nullptr);
+
+   group->removeObject(obj);
+   REQUIRE(group->size() == 0);
+
+   obj->deleteObject();
+   set->deleteObject();
+   group->deleteObject();
 }
 
 TEST_CASE("SimSet container operations and traversal", "[SimSet]") {
@@ -774,4 +1015,78 @@ TEST_CASE("SimGroup hierarchy and recursive lookup", "[SimGroup]") {
    REQUIRE(trackedChild == nullptr);
    REQUIRE(trackedInner == nullptr);
    renamed->deleteObject();
+}
+
+TEST_CASE("SimDataBlock serialization and modified-key behavior", "[SimDataBlock]") {
+   SimDataBlock* baseBlock = createRegisteredObjectWithId<SimDataBlock>(uniqueName("baseBlock"), DataBlockObjectIdFirst);
+   SimDataBlock* orderedBlock = createRegisteredObjectWithId<SimDataBlock>(uniqueName("orderedBlock"), DataBlockObjectIdFirst + 1);
+   SimDataBlock* outOfRangeBlock = createRegisteredObjectWithId<SimDataBlock>(uniqueName("outOfRangeBlock"), DataBlockObjectIdLast + 100);
+   SimDataBlockGroup* dataBlockGroup = dynamic_cast<SimDataBlockGroup*>(Sim::getDataBlockGroup());
+
+   REQUIRE_FALSE(baseBlock->isClientOnly());
+   REQUIRE_FALSE(orderedBlock->isClientOnly());
+   REQUIRE(outOfRangeBlock->isClientOnly());
+   REQUIRE(baseBlock->getModifiedKey() > 0);
+   REQUIRE(orderedBlock->getModifiedKey() > 0);
+   REQUIRE(outOfRangeBlock->getModifiedKey() > 0);
+   REQUIRE(dataBlockGroup != nullptr);
+
+   const S32 baseModifiedBefore = baseBlock->getModifiedKey();
+   baseBlock->onStaticModified("internalName", "baseInternal");
+   baseBlock->onStaticModified("canSaveDynamicFields", "0");
+   REQUIRE(baseBlock->getModifiedKey() != baseModifiedBefore);
+
+   baseBlock->setDataFieldDynamic(StringTable->insert("dbDynamic"), nullptr, "dbValue", TypeString);
+   REQUIRE(std::string(baseBlock->getDataFieldDynamic(StringTable->insert("dbDynamic"), nullptr)) == "dbValue");
+
+   char serializationBuffer[4096] = {};
+   MemStream serializationStream(sizeof(serializationBuffer), serializationBuffer, true, true);
+   baseBlock->write(serializationStream, 0);
+   std::string serializationOutput = serializationBuffer;
+   REQUIRE(serializationOutput.find("datablock SimDataBlock(") != std::string::npos);
+   REQUIRE(serializationOutput.find("dbDynamic") != std::string::npos);
+
+   baseBlock->setCanSaveDynamicFields(false);
+   std::memset(serializationBuffer, 0, sizeof(serializationBuffer));
+   MemStream serializationStream2(sizeof(serializationBuffer), serializationBuffer, true, true);
+   baseBlock->write(serializationStream2, 0);
+   serializationOutput = serializationBuffer;
+   REQUIRE(serializationOutput.find("dbDynamic") == std::string::npos);
+
+   char packedBuffer[4096] = {};
+   MemStream packedStream(sizeof(packedBuffer), packedBuffer, true, true);
+   outOfRangeBlock->write(packedStream, 0);
+   std::string packedOutput = packedBuffer;
+   REQUIRE(packedOutput.find("new SimDataBlock(") != std::string::npos);
+
+   // `write()` is plain script serialization. The network-specific path is `packData` / `unpackData`.
+   REQUIRE(baseBlock->preload(true, packedBuffer));
+   baseBlock->packData(nullptr);
+   baseBlock->unpackData(nullptr);
+
+   const S32 baseKeyAfterStaticWrite = baseBlock->getModifiedKey();
+   const S32 outOfRangeKeyBeforeWrite = outOfRangeBlock->getModifiedKey();
+   outOfRangeBlock->onStaticModified("internalName", "outOfRangeInternal");
+   outOfRangeBlock->onStaticModified("canSaveDynamicFields", "0");
+   REQUIRE(outOfRangeBlock->getModifiedKey() != outOfRangeKeyBeforeWrite);
+   REQUIRE(baseKeyAfterStaticWrite == baseBlock->getModifiedKey());
+
+   dataBlockGroup->sort();
+   S32 serverIndex = -1;
+   S32 orderedIndex = -1;
+   S32 index = 0;
+   for (SimGroupIterator itr(dataBlockGroup); *itr; ++itr, ++index)
+   {
+      if (*itr == baseBlock)
+         serverIndex = index;
+      if (*itr == orderedBlock)
+         orderedIndex = index;
+   }
+   REQUIRE(serverIndex >= 0);
+   REQUIRE(orderedIndex >= 0);
+   REQUIRE(serverIndex > orderedIndex);
+
+   baseBlock->deleteObject();
+   orderedBlock->deleteObject();
+   outOfRangeBlock->deleteObject();
 }
