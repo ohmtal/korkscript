@@ -33,11 +33,14 @@ public:
    U32 mOnStaticModifiedCount;
    U32 mOnDeleteNotifyCount;
    U32 mConsoleCallCount;
+   U32 mSignalDispatchCount;
    S32 mLastProcessArgc;
    std::string mLastProcessArg0;
    std::string mLastName;
    std::string mLastStaticSlot;
    std::string mLastStaticValue;
+   std::string mLastPayload;
+   std::string mLastSignalName;
 
    TestSimObject()
       : mTestValue(0),
@@ -49,6 +52,7 @@ public:
         mOnStaticModifiedCount(0),
         mOnDeleteNotifyCount(0),
         mConsoleCallCount(0),
+        mSignalDispatchCount(0),
         mLastProcessArgc(-1)
    {
    }
@@ -121,7 +125,32 @@ ConsoleMethod(TestSimObject, bumpCounter, void, 2, 2, "")
    object->mConsoleCallCount++;
 }
 
+ConsoleMethod(TestSimObject, recordPayload, void, 3, 3, "")
+{
+   object->mConsoleCallCount++;
+   object->mLastPayload = argv[2];
+}
+
+ConsoleMethod(TestSimObject, handleSignal, void, 3, 3, "")
+{
+   object->mSignalDispatchCount++;
+   object->mLastSignalName = argv[0];
+   object->mLastPayload = argv[2];
+}
+
 static std::atomic<U32> gNextTestObjectId{100000};
+static std::string gCapturedConsoleOutput;
+extern KorkApi::Vm* sVM;
+
+static void captureConsoleLine(U32, const char* consoleLine, void* userPtr)
+{
+   if (!userPtr || !consoleLine)
+      return;
+
+   auto* out = static_cast<std::string*>(userPtr);
+   out->append(consoleLine);
+   out->push_back('\n');
+}
 
 static std::string uniqueName(const char* prefix)
 {
@@ -254,6 +283,233 @@ TEST_CASE("SimObject fields and copy helpers", "[SimObject]") {
    source->deleteObject();
 }
 
+TEST_CASE("SimFieldDictionary basic behavior", "[SimFieldDictionary]") {
+   SimFieldDictionary dict;
+   REQUIRE(dict.getVersion() == 0);
+
+   const StringTableEntry foo = StringTable->insert("fooField");
+   const StringTableEntry bar = StringTable->insert("barField");
+
+   dict.setFieldValue(foo, "17", TypeS32);
+   dict.setFieldValue(bar, "hello", TypeString);
+   REQUIRE(dict.getVersion() == 2);
+
+   REQUIRE(std::string(dict.getFieldValue(foo)) == "17");
+   REQUIRE(std::string(dict.getFieldValue(bar)) == "hello");
+
+   std::vector<std::string> keys;
+   std::vector<std::string> values;
+   std::vector<U32> types;
+   for (SimFieldDictionaryIterator itr(&dict); itr.isValid(); ++itr)
+   {
+      auto* entry = *itr;
+      REQUIRE(entry != nullptr);
+      keys.emplace_back(entry->slotName);
+      values.emplace_back(entry->value ? entry->value : "");
+      types.emplace_back(entry->enforcedTypeId);
+   }
+
+   REQUIRE(keys.size() == 2);
+   REQUIRE(values.size() == 2);
+   REQUIRE(types.size() == 2);
+   REQUIRE(std::find(keys.begin(), keys.end(), "fooField") != keys.end());
+   REQUIRE(std::find(keys.begin(), keys.end(), "barField") != keys.end());
+   REQUIRE(std::find(types.begin(), types.end(), TypeS32) != types.end());
+   REQUIRE(std::find(types.begin(), types.end(), TypeString) != types.end());
+
+   SimFieldDictionary copy;
+   copy.assignFrom(&dict);
+   REQUIRE(std::string(copy.getFieldValue(bar)) == "hello");
+}
+
+TEST_CASE("Registered fields and field access controls", "[SimObject][Fields]") {
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("fieldObj"));
+
+   obj->getVMObject()->flags |= KorkApi::ModStaticFields | KorkApi::ModDynamicFields;
+
+   obj->setDataField(StringTable->insert("testValue"), nullptr, "37");
+   REQUIRE(obj->mTestValue == 37);
+   REQUIRE(std::string(obj->getDataField(StringTable->insert("testValue"), nullptr)) == "37");
+   REQUIRE(obj->getDataFieldType(StringTable->insert("testValue"), nullptr) == TypeS32);
+
+   obj->setDataField(StringTable->insert("dynamicField"), nullptr, "dynamicValue");
+   REQUIRE(std::string(obj->getDataField(StringTable->insert("dynamicField"), nullptr)) == "dynamicValue");
+   REQUIRE(obj->getDataFieldType(StringTable->insert("dynamicField"), nullptr) == 0);
+
+   obj->getVMObject()->flags &= ~KorkApi::ModStaticFields;
+   obj->setDataField(StringTable->insert("testValue"), nullptr, "99");
+   REQUIRE(obj->mTestValue == 37);
+   REQUIRE(std::string(obj->getDataField(StringTable->insert("testValue"), nullptr)) == "37");
+
+   obj->getVMObject()->flags &= ~KorkApi::ModDynamicFields;
+   obj->setDataField(StringTable->insert("dynamicField"), nullptr, "changed");
+   REQUIRE(std::string(obj->getDataField(StringTable->insert("dynamicField"), nullptr)) == "dynamicValue");
+
+   obj->deleteObject();
+}
+
+TEST_CASE("Locked and hidden flags", "[SimObject]") {
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("lockObj"));
+   obj->getVMObject()->flags |= KorkApi::ModDynamicFields;
+
+   obj->setLocked(true);
+   obj->setHidden(true);
+   REQUIRE(obj->isLocked());
+   REQUIRE(obj->isHidden());
+
+   obj->setLocked(false);
+   obj->setHidden(false);
+   REQUIRE_FALSE(obj->isLocked());
+   REQUIRE_FALSE(obj->isHidden());
+
+   obj->deleteObject();
+}
+
+TEST_CASE("Delete notifications and processDeleteNotifies", "[SimObject]") {
+   TestSimObject* target = createRegisteredObject<TestSimObject>(uniqueName("notifyTarget"));
+   TestSimObject* watcher = createRegisteredObject<TestSimObject>(uniqueName("notifyWatcher"));
+
+   SimObject* trackedTarget = target;
+   target->registerReference(&trackedTarget);
+   watcher->deleteNotify(target);
+
+   target->deleteObject();
+
+   REQUIRE(trackedTarget == nullptr);
+   REQUIRE(watcher->mOnDeleteNotifyCount == 1);
+
+   watcher->deleteObject();
+}
+
+TEST_CASE("Signal dispatch", "[SimObject][Signals]") {
+   TestSimObject* source = createRegisteredObject<TestSimObject>(uniqueName("signalSource"));
+   TestSimObject* listener = createRegisteredObject<TestSimObject>(uniqueName("signalListener"));
+
+   const StringTableEntry signalName = StringTable->insert("unitSignal");
+   Con::evaluate("signal TestSimObject::unitSignal(%amount);");
+
+   REQUIRE(source->addSignalListener(signalName, listener, StringTable->insert("handleSignal")));
+   REQUIRE(source->hasSignal(signalName));
+
+   KorkApi::ConsoleValue signalArgs[1];
+   signalArgs[0] = KorkApi::ConsoleValue::makeString("payloadValue");
+   source->triggerSignal(nullptr, signalName, 1, signalArgs);
+
+   REQUIRE(listener->mSignalDispatchCount == 1);
+   REQUIRE(listener->mLastSignalName == "unitSignal");
+   REQUIRE(listener->mLastPayload == "payloadValue");
+
+   REQUIRE(source->removeSignalListener(signalName, listener, StringTable->insert("handleSignal")));
+   listener->mLastPayload.clear();
+   source->triggerSignal(nullptr, signalName, 1, signalArgs);
+   REQUIRE(listener->mSignalDispatchCount == 1);
+
+   listener->deleteObject();
+   source->deleteObject();
+}
+
+TEST_CASE("SimObject dump and tabComplete", "[SimObject]") {
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("dumpObj"));
+   obj->getVMObject()->flags |= KorkApi::ModStaticFields | KorkApi::ModDynamicFields;
+   obj->setDataField(StringTable->insert("testValue"), nullptr, "21");
+   obj->setDataFieldDynamic(StringTable->insert("dynamicField"), nullptr, "dynValue", TypeString);
+
+   gCapturedConsoleOutput.clear();
+   Con::addConsumer(captureConsoleLine, &gCapturedConsoleOutput);
+   obj->dump();
+   Con::removeConsumer(captureConsoleLine, &gCapturedConsoleOutput);
+
+   REQUIRE(gCapturedConsoleOutput.find("Static Fields:") != std::string::npos);
+   REQUIRE(gCapturedConsoleOutput.find("testValue") != std::string::npos);
+   REQUIRE(gCapturedConsoleOutput.find("Dynamic Fields:") != std::string::npos);
+   REQUIRE(gCapturedConsoleOutput.find("dynamicField") != std::string::npos);
+   REQUIRE(gCapturedConsoleOutput.find("Methods:") != std::string::npos);
+
+   const char* completion = obj->tabComplete("bump", 4, true);
+   REQUIRE(completion != nullptr);
+   REQUIRE(std::string(completion) == "bumpCounter");
+
+   obj->deleteObject();
+}
+
+TEST_CASE("setParentGroup updates membership", "[SimObject][SimGroup]") {
+   SimGroup* groupA = createRegisteredObject<SimGroup>(uniqueName("parentA"));
+   SimGroup* groupB = createRegisteredObject<SimGroup>(uniqueName("parentB"));
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("parented"));
+
+   obj->getVMObject()->flags |= KorkApi::ModStaticFields;
+
+   obj->setDataField(StringTable->insert("parentGroup"), nullptr, groupA->getName());
+   REQUIRE(obj->getGroup() == groupA);
+   REQUIRE(obj->isChildOfGroup(groupA));
+   REQUIRE(obj->mOnGroupAddCount == 1);
+
+   obj->setDataField(StringTable->insert("parentGroup"), nullptr, groupB->getName());
+   REQUIRE(obj->getGroup() == groupB);
+   REQUIRE(obj->isChildOfGroup(groupB));
+   REQUIRE(obj->mOnGroupAddCount == 2);
+
+   obj->deleteObject();
+   groupA->deleteObject();
+   groupB->deleteObject();
+}
+
+TEST_CASE("Namespace linking and unlinking", "[SimObject][Namespaces]") {
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("nsObj"));
+   const StringTableEntry classNsName = StringTable->insert(uniqueName("ClassNS").c_str());
+   const StringTableEntry superNsName = StringTable->insert(uniqueName("SuperNS").c_str());
+   const StringTableEntry otherClassNsName = StringTable->insert(uniqueName("OtherClassNS").c_str());
+   const StringTableEntry otherSuperNsName = StringTable->insert(uniqueName("OtherSuperNS").c_str());
+   const StringTableEntry classSignal = StringTable->insert("classSignal");
+   const StringTableEntry superSignal = StringTable->insert("superSignal");
+   const StringTableEntry otherClassSignal = StringTable->insert("otherClassSignal");
+   const StringTableEntry otherSuperSignal = StringTable->insert("otherSuperSignal");
+
+   Con::evaluate((std::string("signal ") + classNsName + "::classSignal();").c_str());
+   Con::evaluate((std::string("signal ") + superNsName + "::superSignal();").c_str());
+   Con::evaluate((std::string("signal ") + otherClassNsName + "::otherClassSignal();").c_str());
+   Con::evaluate((std::string("signal ") + otherSuperNsName + "::otherSuperSignal();").c_str());
+
+   obj->setSuperClassNamespace(superNsName);
+   obj->setClassNamespace(classNsName);
+   REQUIRE(obj->getClassNamespace() == classNsName);
+   REQUIRE(obj->getSuperClassNamespace() == superNsName);
+   REQUIRE(obj->hasSignal(classSignal));
+   REQUIRE(obj->hasSignal(superSignal));
+
+   obj->setClassNamespace(otherClassNsName);
+   REQUIRE(obj->getClassNamespace() == otherClassNsName);
+   REQUIRE_FALSE(obj->hasSignal(classSignal));
+   REQUIRE(obj->hasSignal(otherClassSignal));
+   REQUIRE(obj->hasSignal(superSignal));
+
+   obj->setSuperClassNamespace(otherSuperNsName);
+   REQUIRE(obj->getSuperClassNamespace() == otherSuperNsName);
+   REQUIRE_FALSE(obj->hasSignal(superSignal));
+   REQUIRE(obj->hasSignal(otherSuperSignal));
+
+   obj->deleteObject();
+}
+
+TEST_CASE("SimConsoleEvent copies payload and invokes object methods", "[SimConsoleEvent]") {
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("eventObj"));
+
+   char payloadBuffer[] = "payloadBeforeCopy";
+   KorkApi::ConsoleValue args[3];
+   args[0] = KorkApi::ConsoleValue::makeString("recordPayload");
+   args[1] = KorkApi::ConsoleValue::makeString("");
+   args[2] = KorkApi::ConsoleValue::makeString(payloadBuffer);
+
+   SimConsoleEvent evt(3, args, true);
+   dStrcpy(payloadBuffer, "mutatedPayload");
+   evt.process(obj);
+
+   REQUIRE(obj->mConsoleCallCount == 1);
+   REQUIRE(obj->mLastPayload == "payloadBeforeCopy");
+
+   obj->deleteObject();
+}
+
 TEST_CASE("SimObject set membership helpers", "[SimObject][SimSet]") {
    SimSet* set = createRegisteredObject<SimSet>(uniqueName("set"));
    TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("member"));
@@ -275,6 +531,36 @@ TEST_CASE("SimObject set membership helpers", "[SimObject][SimSet]") {
 
    obj->deleteObject();
    set->deleteObject();
+}
+
+TEST_CASE("SimSet and SimGroup membership semantics", "[SimSet][SimGroup]") {
+   SimSet* set = createRegisteredObject<SimSet>(uniqueName("plainSet"));
+   SimGroup* groupA = createRegisteredObject<SimGroup>(uniqueName("groupA"));
+   SimGroup* groupB = createRegisteredObject<SimGroup>(uniqueName("groupB"));
+   TestSimObject* obj = createRegisteredObject<TestSimObject>(uniqueName("member"));
+
+   REQUIRE(obj->getGroup() == nullptr);
+
+   groupA->addObject(obj);
+   REQUIRE(obj->getGroup() == groupA);
+   REQUIRE(obj->isChildOfGroup(groupA));
+
+   set->addObject(obj);
+   REQUIRE(obj->getGroup() == groupA);
+   REQUIRE(set->size() == 1);
+   REQUIRE(set->front() == obj);
+
+   groupB->addObject(obj);
+   REQUIRE(obj->getGroup() == groupB);
+   REQUIRE(obj->isChildOfGroup(groupB));
+   REQUIRE_FALSE(obj->isChildOfGroup(groupA));
+   REQUIRE(set->size() == 1);
+   REQUIRE(set->findObject(obj->getName()) == obj);
+
+   obj->deleteObject();
+   set->deleteObject();
+   groupA->deleteObject();
+   groupB->deleteObject();
 }
 
 TEST_CASE("SimSet container operations and traversal", "[SimSet]") {
@@ -396,6 +682,34 @@ TEST_CASE("SimSet deletion and clear behavior", "[SimSet]") {
    REQUIRE(set->size() == 0);
 
    set->deleteObject();
+}
+
+TEST_CASE("SimSet and SimGroup destruction semantics", "[SimSet][SimGroup]") {
+   SimSet* set = createRegisteredObject<SimSet>(uniqueName("destructSet"));
+   SimGroup* group = createRegisteredObject<SimGroup>(uniqueName("destructGroup"));
+   TestSimObject* setMember = createRegisteredObject<TestSimObject>(uniqueName("setMember"));
+   TestSimObject* groupMember = createRegisteredObject<TestSimObject>(uniqueName("groupMember"));
+
+   SimObject* trackedSetMember = setMember;
+   SimObject* trackedGroupMember = groupMember;
+   setMember->registerReference(&trackedSetMember);
+   groupMember->registerReference(&trackedGroupMember);
+   const U32 groupMemberId = groupMember->getId();
+
+   set->addObject(setMember);
+   group->addObject(groupMember);
+
+   set->deleteObject();
+   REQUIRE(trackedSetMember != nullptr);
+   REQUIRE(Sim::findObject(setMember->getId()) == setMember);
+   REQUIRE(trackedGroupMember != nullptr);
+   REQUIRE(Sim::findObject(groupMemberId) == groupMember);
+
+   group->deleteObject();
+   REQUIRE(trackedGroupMember == nullptr);
+   REQUIRE(Sim::findObject(groupMemberId) == nullptr);
+
+   setMember->deleteObject();
 }
 
 TEST_CASE("SimGroup hierarchy and recursive lookup", "[SimGroup]") {
