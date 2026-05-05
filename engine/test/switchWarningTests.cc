@@ -21,8 +21,29 @@ namespace
 {
    struct CapturedLine
    {
-      ConsoleLogEntry::Level level;
+      U32 level;
       std::string text;
+   };
+
+   class LogCaptureGuard
+   {
+   public:
+      LogCaptureGuard(KorkApi::Vm* vm, KorkApi::ConsumerCallback cb, void* userPtr)
+         : mVm(vm)
+      {
+         mVm->getLogConsumer(&mPrevLogFn, &mPrevLogUser);
+         mVm->setLogConsumer(cb, userPtr);
+      }
+
+      ~LogCaptureGuard()
+      {
+         mVm->setLogConsumer(mPrevLogFn, mPrevLogUser);
+      }
+
+   private:
+      KorkApi::Vm* mVm;
+      KorkApi::ConsumerCallback mPrevLogFn;
+      void* mPrevLogUser;
    };
 
    void captureLine(U32 level, const char* text, void* userPtr)
@@ -31,29 +52,11 @@ namespace
       lines->push_back({ static_cast<ConsoleLogEntry::Level>(level), text ? text : "" });
    }
 
-   class ConsumerGuard
-   {
-   public:
-      ConsumerGuard(KorkApi::ConsumerCallback cb, void* userPtr)
-         : mCallback(cb), mUserPtr(userPtr)
-      {
-         Con::addConsumer(cb, userPtr);
-      }
-
-      ~ConsumerGuard()
-      {
-         Con::removeConsumer(mCallback, mUserPtr);
-      }
-
-   private:
-      KorkApi::ConsumerCallback mCallback;
-      void* mUserPtr;
-   };
-
    std::vector<CapturedLine> compileScript(const std::string& script, const char* filename)
    {
       std::vector<CapturedLine> lines;
-      ConsumerGuard guard(captureLine, &lines);
+      LogCaptureGuard logGuard(sVM, captureLine, &lines);
+
       KorkApi::CompiledBlock block{};
       REQUIRE(sVM->compileCodeBlock(script.c_str(), filename, &block));
       sVM->freeCompiledBlock(block);
@@ -63,7 +66,7 @@ namespace
    bool hasWarning(const std::vector<CapturedLine>& lines, const std::string& needle)
    {
       return std::any_of(lines.begin(), lines.end(), [&](const CapturedLine& line) {
-         return line.level == ConsoleLogEntry::Warning && line.text.find(needle) != std::string::npos;
+         return line.level == 1 && line.text.find(needle) != std::string::npos;
       });
    }
 }

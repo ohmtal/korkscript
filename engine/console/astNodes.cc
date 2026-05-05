@@ -159,8 +159,11 @@ U32 BreakStmtNode::compileStmt(CodeStream &codeStream, U32 ip)
    }
    else if (codeStream.inSwitch())
    {
-      Con::warnf(ConsoleLogEntry::Script, "%s (%d): 'break' inside switch is unnecessary; this switch does not fall through.",
-         codeStream.getFilename() ? codeStream.getFilename() : "<unknown>", dbgLineNumber);
+      if (codeStream.mResources)
+      {
+         codeStream.mResources->printf(1, "%s (%d): 'break' inside switch is unnecessary; this switch does not fall through.",
+            codeStream.getFilename() ? codeStream.getFilename() : "<unknown>", dbgLineNumber);
+      }
    }
    else
    {

@@ -1237,6 +1237,30 @@ void Vm::markNamespaceGroup(NamespaceId nsId, StringTableEntry groupName, String
    return ns->markGroup(groupName, usage);
 }
 
+void Vm::setLogConsumer(ConsumerCallback cb, void* userPtr)
+{
+   VmAllocTLS::Scope memScope(mInternal);
+   mInternal->mConfig.logFn = cb;
+   mInternal->mConfig.logUser = userPtr;
+   if (mInternal->mCompilerResources)
+   {
+      mInternal->mCompilerResources->logFn = cb;
+      mInternal->mCompilerResources->logUser = userPtr;
+   }
+}
+
+void Vm::getLogConsumer(ConsumerCallback* cb, void** userPtr) const
+{
+   if (cb)
+   {
+      *cb = mInternal->mConfig.logFn;
+   }
+   if (userPtr)
+   {
+      *userPtr = mInternal->mConfig.logUser;
+   }
+}
+
 bool Vm::compileCodeBlock(const char* code, const char* filename, CompiledBlock* outBlock)
 {
    VmAllocTLS::Scope memScope(mInternal);

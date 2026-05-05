@@ -164,6 +164,11 @@ namespace Compiler
 
    void Resources::printf(U32 level, const char *fmt, ...)
    {
+      if (!logFn)
+      {
+         return;
+      }
+
       va_list argptr;
       va_start(argptr, fmt);
       char buf[8192];
@@ -601,4 +606,3 @@ void CodeStream::reset()
       mCodeHead = mCode;
    }
 }
-

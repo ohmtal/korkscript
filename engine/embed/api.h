@@ -674,6 +674,9 @@ public:
    StringTableEntry getMethodNamespaceName(NamespaceId nsId, StringTableEntry name);
    void markNamespaceGroup(NamespaceId nsId, StringTableEntry groupName, StringTableEntry usage);
 
+   void setLogConsumer(ConsumerCallback cb, void* userPtr);
+   void getLogConsumer(ConsumerCallback* cb, void** userPtr) const;
+
 
    bool compileCodeBlock(const char* code, const char* filename, CompiledBlock* outBlock);
    ConsoleValue execCodeBlock(U32 codeSize, U8* code, const char* filename, const char* modPath, bool noCalls, int setFrame);
