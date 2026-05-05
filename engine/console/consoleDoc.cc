@@ -107,7 +107,7 @@ void printClassHeader(KorkApi::VmInternal* vmInternal, const char* usage, const 
 
          // Print all fields that aren't associated with the 'field' keyword.
          if( strcmp( keyword, "field" ) )
-            vmInternal->printf(0,  "$s", lineStr );
+            vmInternal->printf(0,  "%s", lineStr );
 
 
          // Fetch next line ending
