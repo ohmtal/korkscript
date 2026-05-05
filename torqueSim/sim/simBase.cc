@@ -3387,7 +3387,7 @@ void SimGroup::addObject(SimObject* obj)
    // but it should be good enough to prevent some self-foot-shooting.
    if(obj == this)
    {
-      Con::errorf("SimGroup::addObject - (%d) can't add self!", getIdString());
+      Con::errorf("SimGroup::addObject - (%s) can't add self!", getIdString());
       unlock();
       return;
    }
