@@ -1623,6 +1623,7 @@ Vm* createVM(Config* cfg)
 
 void destroyVM(Vm* vm)
 {
+   VmAllocTLS::Scope memScope(vm->mInternal);
    FreeFn freeFn = vm->mInternal->mConfig.freeFn;
    void* freeUser = vm->mInternal->mConfig.allocUser;
    
