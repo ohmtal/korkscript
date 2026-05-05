@@ -59,9 +59,9 @@ void printClassHeader(KorkApi::VmInternal* vmInternal, const char* usage, const 
    {
       // Copy Usage Document
       S32 usageLen = strlen( usage );
-      KorkApi::Vector<char> usageStrV( usageLen );
+      KorkApi::Vector<char> usageStrV( usageLen + 1 );
       char* usageStr = usageStrV.data();
-      strcpy( usageStr, usage );
+      memcpy( usageStr, usage, (size_t)usageLen + 1 );
 
       // Print Header
       vmInternal->printf(0,  "/*!" );
