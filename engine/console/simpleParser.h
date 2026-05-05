@@ -614,18 +614,24 @@ private:
          expectChar(':', "':' expected after default");
          StmtNode* defBody = parseCaseBody();
          // CASE ... ':' stmts DEFAULT ':' stmts
-         return IfStmtNode::alloc(mResources, caseTok.pos.line, list, body, defBody, false);
+         IfStmtNode* ret = IfStmtNode::alloc(mResources, caseTok.pos.line, list, body, defBody, false);
+         ret->switchScope = true;
+         return ret;
       }
       
       if (LA().kind == TT::rwCASE)
       {
          // CASE ... ':' stmts case_block
          IfStmtNode* rest = parseCaseBlock();
-         return IfStmtNode::alloc(mResources, caseTok.pos.line, list, body, rest, true);
+         IfStmtNode* ret = IfStmtNode::alloc(mResources, caseTok.pos.line, list, body, rest, true);
+         ret->switchScope = true;
+         return ret;
       }
       
       // CASE ... ':' stmts
-      return IfStmtNode::alloc(mResources, caseTok.pos.line, list, body, nullptr, false);
+      IfStmtNode* ret = IfStmtNode::alloc(mResources, caseTok.pos.line, list, body, nullptr, false);
+      ret->switchScope = true;
+      return ret;
    }
    
    // Handles switch statement

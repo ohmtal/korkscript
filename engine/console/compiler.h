@@ -338,6 +338,7 @@ protected:
    KorkApi::Vector<U32> mFixList;
    KorkApi::Vector<U32> mFixStack;
    KorkApi::Vector<bool> mFixLoopStack;
+   U32 mSwitchScopeDepth;
    KorkApi::Vector<PatchEntry> mPatchList;
    /// }
 
@@ -357,7 +358,7 @@ public:
    
 public:
 
-   CodeStream(Compiler::Resources* res) : mCode(0), mCodeHead(nullptr), mCodePos(0), mFilename(nullptr), mResources(res)
+   CodeStream(Compiler::Resources* res) : mCode(0), mCodeHead(nullptr), mCodePos(0), mFilename(nullptr), mResources(res), mSwitchScopeDepth(0)
    {
    }
    
@@ -422,6 +423,11 @@ public:
       }
       return false;
    }
+
+   inline bool inSwitch()
+   {
+      return mSwitchScopeDepth > 0;
+   }
    
    inline U32 emitFix(FixType type)
    {
@@ -442,6 +448,11 @@ public:
       mFixStack.push_back(mFixList.size());
       mFixLoopStack.push_back(isLoop);
    }
+
+   inline void pushSwitchScope()
+   {
+      ++mSwitchScopeDepth;
+   }
    
    inline void popFixScope()
    {
@@ -452,6 +463,12 @@ public:
          mFixList.pop_back();
       mFixStack.pop_back();
       mFixLoopStack.pop_back();
+   }
+
+   inline void popSwitchScope()
+   {
+      AssertFatal(mSwitchScopeDepth > 0, "Switch stack mismatch");
+      --mSwitchScopeDepth;
    }
    
    void fixLoop(U32 loopBlockStart, U32 breakPoint, U32 continuePoint);

@@ -29,6 +29,7 @@
 
 #include "platform/platform.h"
 
+#include "torqueSim/console/console.h"
 #include "embed/api.h"
 #include "embed/internalApi.h"
 #include "console/ast.h"
@@ -156,6 +157,11 @@ U32 BreakStmtNode::compileStmt(CodeStream &codeStream, U32 ip)
       codeStream.emit(OP_JMP);
       codeStream.emitFix(CodeStream::FIXTYPE_BREAK);
    }
+   else if (codeStream.inSwitch())
+   {
+      Con::warnf(ConsoleLogEntry::Script, "%s (%d): 'break' inside switch is unnecessary; this switch does not fall through.",
+         codeStream.getFilename() ? codeStream.getFilename() : "<unknown>", dbgLineNumber);
+   }
    else
    {
       // Con::warnf(ConsoleLogEntry::General, "%s (%d): break outside of loop... ignoring.", codeStream.getFilename(), dbgLineNumber);
@@ -269,10 +275,14 @@ U32 IfStmtNode::compileStmt(CodeStream &codeStream, U32 ip)
    if(elseBlock)
    {
       elseIp = codeStream.emit(0);
+      if (switchScope)
+         codeStream.pushSwitchScope();
       elseOffset = compileBlock(ifBlock, codeStream, ip) + 2;
       codeStream.emit(OP_JMP);
       endifIp = codeStream.emit(0);
       endifOffset = compileBlock(elseBlock, codeStream, ip);
+      if (switchScope)
+         codeStream.popSwitchScope();
       
       codeStream.patch(endifIp, endifOffset);
       codeStream.patch(elseIp, elseOffset);
@@ -280,7 +290,11 @@ U32 IfStmtNode::compileStmt(CodeStream &codeStream, U32 ip)
    else
    {
       endifIp = codeStream.emit(0);
+      if (switchScope)
+         codeStream.pushSwitchScope();
       endifOffset = compileBlock(ifBlock, codeStream, ip);
+      if (switchScope)
+         codeStream.popSwitchScope();
       
       codeStream.patch(endifIp, endifOffset);
    }

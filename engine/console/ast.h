@@ -231,6 +231,7 @@ struct IfStmtNode : StmtNode
    U32 elseOffset;
    bool integer;
    bool propagate;
+   bool switchScope;
 
    static IfStmtNode *alloc( Compiler::Resources* res, S32 lineNumber, ExprNode *testExpr, StmtNode *ifBlock, StmtNode *elseBlock, bool propagateThrough );
    void propagateSwitchExpr(Compiler::Resources* res, ExprNode *left, bool string);

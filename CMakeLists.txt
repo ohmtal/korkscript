@@ -145,6 +145,9 @@ file(GLOB KS_CATCH2_ENGINE_TEST_SRCS
 	test/engine_tests/*.cc
 	test/engine_tests/*.cpp
 	test/engine_tests/*.cxx
+	engine/test/*.cc
+	engine/test/*.cpp
+	engine/test/*.cxx
 )
 
 file(GLOB KS_CATCH2_API_TEST_SRCS

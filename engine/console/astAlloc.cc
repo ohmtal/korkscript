@@ -87,6 +87,7 @@ IfStmtNode *IfStmtNode::alloc( Compiler::Resources* res, S32 lineNumber, ExprNod
    ret->ifBlock = ifBlock;
    ret->elseBlock = elseBlock;
    ret->propagate = propagate;
+   ret->switchScope = false;
    ret->integer = 0;
    
    return ret;
