@@ -27,9 +27,16 @@
 #include "sim/dynamicTypes.h"
 #endif
 
+// XXTH fix compiler warning
+// #ifndef Offset
+// #define Offset(x, cls) offsetof(cls, x)
+// #endif
 #ifndef Offset
-#define Offset(x, cls) offsetof(cls, x)
+#define Offset(x, cls) \
+((size_t) &((cls*)0x1000)->x - 0x1000)
 #endif
+
+
 
 // Define Core Console Types
 DefineConsoleType( TypeF32 )
