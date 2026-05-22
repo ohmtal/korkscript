@@ -461,7 +461,16 @@ ConsoleTypeOpDefaultNumeric( TypeS32 )
 
 ConsoleGetType( TypeF32 )
 {
-   S32 value = 0;
+  /*
+   * XXTH
+   * problem when i dump the object all float vars show a string i had
+   * defined some vars before.
+   * also => echo($sprite.y); << shows the string from the texture
+   * now it works ,,, now idea how i fixed it ....
+   */
+
+  //XXTH orig: S32 value = 0;
+  F32 value = 0.f;
    
    if (inputStorage->isField)
    {
@@ -495,19 +504,27 @@ ConsoleGetType( TypeF32 )
             requestedType == KorkApi::ConsoleValue::TypeInternalNumber ||
             requestedType == KorkApi::ConsoleValue::TypeInternalUnsigned)
    {
+
       if (outputStorage->isField)
       {
          F32* dst = (F32*)ConsoleGetOutputStoragePtr();
          *dst = value;
+
       }
       
-      if (requestedType == KorkApi::ConsoleValue::TypeInternalUnsigned)
+    //XXTH guess the next line should not be here or it's a unfinished statement
+    // if (requestedType == KorkApi::ConsoleValue::TypeInternalUnsigned)
       
+
       if (outputStorage->data.storageRegister)
       {
-         *outputStorage->data.storageRegister = (requestedType == KorkApi::ConsoleValue::TypeInternalUnsigned) ? KorkApi::ConsoleValue::makeUnsigned(value) : KorkApi::ConsoleValue::makeNumber(value);
+         *outputStorage->data.storageRegister =
+            (requestedType == KorkApi::ConsoleValue::TypeInternalUnsigned)
+            ? KorkApi::ConsoleValue::makeUnsigned(value)
+            : KorkApi::ConsoleValue::makeNumber(value);
+
       }
-      
+
       return true;
    }
    else
