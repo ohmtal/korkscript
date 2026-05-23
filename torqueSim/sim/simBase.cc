@@ -2786,9 +2786,20 @@ void SimDataBlock::write(Stream &stream, U32 tabStop, U32 flags)
 
 void SimSet::addObject(SimObject* obj)
 {
+    if (!obj) {
+        Con::errorf("Failed to add object to SimSet it's NULL");
+        return;
+    }
+
    lock();
-   objectList.push_back(obj);
-   deleteNotify(obj);
+   //XXTH verify it's not in the list else deleteObjects is no fun!
+   auto itr = std::find(objectList.begin(), objectList.end(), obj);
+   if (itr == objectList.end())  {
+       objectList.push_back(obj);
+       deleteNotify(obj);
+   } else {
+        Con::warnf("Failed to add object %d to SimSet it's already in the list!", obj->getId());
+   }
    unlock();
 }
 

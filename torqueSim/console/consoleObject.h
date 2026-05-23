@@ -757,13 +757,13 @@ inline bool& ConsoleObject::getDynamicGroupExpand()
 }
 
 //-----------------------------------------------------------------------------
-
+// XXTH added override *compiler warning*
 #define DECLARE_CONOBJECT(className)                                                                                \
    static ConcreteClassRep<className> dynClassRep;                                                                 \
    static AbstractClassRep* getParentStaticClassRep();                                                             \
    static AbstractClassRep* getContainerChildStaticClassRep();                                                     \
    static AbstractClassRep* getStaticClassRep();                                                                   \
-   virtual AbstractClassRep* getClassRep() const
+   virtual AbstractClassRep* getClassRep() const override
 
 #define IMPLEMENT_CONOBJECT(className)                                                                              \
    AbstractClassRep* className::getClassRep() const { return &className::dynClassRep; }                            \
