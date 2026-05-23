@@ -30,10 +30,18 @@
 #include "embed/api.h"
 #include "embed/internalApi.h"
 #include "console/stringStack.h"
+#include <console/console.h>
 
 void StringStack::getArgcArgv(StringTableEntry name, U32 *argc, KorkApi::ConsoleValue **in_argv, bool popStackFrame /* = false */)
 {
    AssertFatal(mNumFrames != 0, "Stack underflow!");
+   //XXTH AssertFatal is nice but disabled and does not prevent the crash when mNumFrames is zero
+   //     and i want to see what cause it .
+   if (mNumFrames == 0) {
+       Con::errorf("StringStack::getArgcArgv failure mNumFrames is ZERO => name: %s argc: %d", name, *argc);
+       return;
+   }
+
    U32 startStack = mFrameOffsets[mNumFrames-1] + 1;
    U32 argCount   = getMin(mStartStackSize - startStack, (U32)MaxArgs-1);
    
