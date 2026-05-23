@@ -247,6 +247,8 @@ Namespace::Namespace()
    mRefCountToParent = 0;
    mUserPtr = nullptr;
    mVmInternal = nullptr;
+
+   mUsage = nullptr; //XXTH caused crash on dumpConsoleClasses(); because not initialized
 }
 
 void Namespace::initVM(KorkApi::VmInternal* vm)
