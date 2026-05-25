@@ -1801,6 +1801,15 @@ KorkApi::FiberRunResult ExprEvalState::runVM()
             else if(frame.lastCallType == FuncCallExprNode::MethodCall)
             {
                frame.saveObject = frame.thisObject;
+
+               //XXTH sanity:
+               if(!callArgv)
+               {
+                  frame.thisObject = 0;
+                  vmInternal->printf(0,"Method call, but arguments are NULL! %s (%s)", frame.codeBlock->getFileLine(ip-6),  tmpFnName);
+                  break; //<< it will CRASH but i have a log line which call it was
+               }
+
                const char* objName = vmInternal->valueAsString(callArgv[1]);
                frame.thisObject = vmInternal->mConfig.iFind.FindObjectByPathFn(vmInternal->mConfig.findUser, objName);
                
