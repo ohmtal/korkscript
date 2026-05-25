@@ -47,10 +47,10 @@ namespace Platform
     StringTableEntry getUserHomeDirectory();
     StringTableEntry getUserDataDirectory();
 
-    /// Date & Time.
-    U64 getTime( void );
-    U64 getVirtualMilliseconds( void );
-    U64 getRealMilliseconds( void );
+    /// Date & Time. FIXME U64
+    U32 getTime( void );
+    U32 getVirtualMilliseconds( void );
+    U32 getRealMilliseconds( void );
     void advanceTime(U32 delta);
     S32 getBackgroundSleepTime();
     void getLocalTime(LocalTime &);
