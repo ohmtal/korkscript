@@ -976,14 +976,31 @@ KorkApi::ConsoleValue getReturnBuffer(U32 bufferSize)
    return sVM->getStringReturnBuffer(bufferSize);
 }
 
-KorkApi::ConsoleValue getReturnBuffer( const char *stringToCopy )
-{
-   KorkApi::ConsoleValue retV = sVM->getStringReturnBuffer( dStrlen( stringToCopy ) + 1 );
-   char *ret = (char*)retV.ptr();
-   dStrcpy( ret, stringToCopy );
-   ret[dStrlen( stringToCopy )] = '\0';
-   return retV;
+
+
+//XXTH new version
+KorkApi::ConsoleValue getReturnBuffer( const char *stringToCopy ) {
+      // U32 len =  dStrlen( stringToCopy );
+      // KorkApi::ConsoleValue retV = Con::getReturnBuffer(len + 1 );
+      // char *ret = (char*)retV.evaluatePtr(sVM->getAllocBase());
+      // dStrncpy(ret, stringToCopy, len);
+      // ret[len] = '\0';
+      // printf("POINTER IS: %p, RET is:%s", (void*)ret, ret);
+      // return retV;
+
+      return ConsoleValue::makeString(stringToCopy);
 }
+
+
+//XXTH orig:
+// KorkApi::ConsoleValue getReturnBuffer( const char *stringToCopy )
+// {
+//    KorkApi::ConsoleValue retV = sVM->getStringReturnBuffer( dStrlen( stringToCopy ) + 1 );
+//    char *ret = (char*)retV.ptr(); //XXTH FIXME ALWAYS nullptr!!
+//    dStrcpy( ret, stringToCopy );
+//    ret[dStrlen( stringToCopy )] = '\0';
+//    return retV;
+// }
 
 KorkApi::ConsoleValue getArgBuffer(U32 bufferSize)
 {
