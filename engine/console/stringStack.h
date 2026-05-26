@@ -60,7 +60,7 @@ struct StringStack
       // the last parameter calls a function with more than one param, you need 
       // at least MaxArgs space available on the stack.
       // MaxFrameDepth also needs to be at least MaxStackSize
-      MaxStackDepth = 16,
+      MaxStackDepth = 16, //XXTH orig: 16,
       MaxFrameDepth = 16,
       MaxArgs = 20,
       ReturnBufferSpace = 512

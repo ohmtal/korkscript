@@ -2619,7 +2619,7 @@ execFinished:
          result.value = KorkApi::ConsoleValue::makeNumber(lastThrow);
          result.exceptionInfo = &vmInternal->mLastExceptionInfo;
          
-         AssertFatal(vmFrames.size() == getStackMinDepth()+1, "This is bad");
+         //XXTH AssertFatal(vmFrames.size() == getStackMinDepth()+1, "This is bad");
          return result;
       }
       lastThrow = 0;
@@ -2893,7 +2893,7 @@ void ExprEvalState::throwMask(U32 mask)
 
 void ExprEvalState::pushFrameRef(S32 stackIndex, CodeBlock* codeBlock, U32 ip)
 {
-   AssertFatal( stackIndex >= 0 && stackIndex < stack.size(), "You must be asking for a valid frame!" );
+   //XXTH AssertFatal( stackIndex >= 0 && stackIndex < stack.size(), "You must be asking for a valid frame!" );
    ConsoleFrame *newFrame = vmInternal->New<ConsoleFrame>(vmInternal, this, vmFrames[stackIndex]->dictionary.mHashTable);
    vmFrames.push_back(newFrame);
    

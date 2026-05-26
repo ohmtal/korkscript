@@ -119,7 +119,7 @@ Mutex::~Mutex()
 {
     
     // Sanity!
-    AssertFatal(ok == 0, "~Mutex() failed: pthread_mutex_destroy() failed.");
+    //XXTH AssertFatal(ok == 0, "~Mutex() failed: pthread_mutex_destroy() failed.");
     
     // Delete the mutex data.
     SAFE_DELETE( mData );

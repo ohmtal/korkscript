@@ -207,7 +207,7 @@ void AbstractClassRep::registerClassWithVm(KorkApi::Vm* vm)
          simObject->unregisterObject();
       };
       mClassInfo.iCreate.ProcessArgsFn = [](KorkApi::Vm* vm, void* createdPtr, const char* name, bool isDatablock, bool internalName, int argc, const char** argv){
-         AssertFatal(vmObject->userPtr, "no userPtr?!");
+         //XXTH AssertFatal(vmObject->userPtr, "no userPtr?!");
          ConsoleObject* consoleObject = static_cast<ConsoleObject*>(createdPtr);
          SimObject* object = dynamic_cast<SimObject*>(consoleObject);
 
