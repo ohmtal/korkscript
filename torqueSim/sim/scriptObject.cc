@@ -46,7 +46,7 @@ IMPLEMENT_CONOBJECT(ScriptObject);
 
 void ScriptObject::initPersistFields()
 {
-   registerClassNameFields(true);
+   //XXTH also in SimObject like in Auteria/TorqueGameEngines! registerClassNameFields(true);
    Parent::initPersistFields();
 }
 

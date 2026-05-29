@@ -2151,7 +2151,7 @@ void SimObject::initPersistFields()
    endGroup("SimBase");
 
    // Namespace Linking.
-   //registerClassNameFields(); // TGE compat - this should only be allowed on GameBase or ScriptObjectxw
+   registerClassNameFields(true); // XXTH enabled
 }
 
 void SimObject::registerClassNameFields(bool includeSuper)
