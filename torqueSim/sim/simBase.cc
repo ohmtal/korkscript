@@ -3169,14 +3169,20 @@ ConsoleMethod(SimSet, listObjects, void, 2, 2, "")
 */
 ConsoleMethod(SimSet, add, void, 3, 0, "obj1, [obj2]*")
 {
-   for(S32 i = 2; i < argc; i++)
-   {
-      SimObject *obj = Sim::findObject(argv[i]);
-      if(obj)
-         object->addObject(obj);
-      else
-         Con::printf("Set::add: Object \"%s\" doesn't exist", argv[i]);
-   }
+    for(S32 i = 2; i < argc; i++)
+    {
+        SimObject *obj = Sim::findObject(argv[i]);
+        if(obj) {
+            if (obj == object) { //XXTH
+                Con::printf("Set::add: Object \"%s\" is the Set itself.", argv[i]);
+                return;
+            }
+            object->addObject(obj);
+        } else {
+            Con::printf("Set::add: Object \"%s\" doesn't exist", argv[i]);
+        }
+
+    }
 }
 
 /*! Removes given SimObject (or list of SimObjects) from the SimSet.
