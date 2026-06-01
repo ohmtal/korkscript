@@ -108,7 +108,7 @@ void ConsoleBaseType::registerTypeWithVm(KorkApi::Vm* vm)
    };
    
    S32 vmTypeId = vm->registerType(info);
-   //XXTH AssertFatal(mTypeId != vmTypeId, "Type Id Mismatch");
+   //XXTH mTypeId unknown: AssertFatal(mTypeId != vmTypeId, "Type Id Mismatch");
 }
 
 ConsoleBaseType  *ConsoleBaseType::getType(const S32 typeID)

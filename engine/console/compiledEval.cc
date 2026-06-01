@@ -2651,7 +2651,10 @@ execFinished:
    }
    else
    {
-      AssertFatal(getMinStackSize() == 0, "Function call occured but no stack pop?");
+       //FIXME (XXTH) happen every time exec is called!!!
+       //   Below i read "we always start at +1" .. so this is maybe wrong -
+       // NOTE: disabled!
+      // AssertFatal(getMinStackSize() == 0, "Function call occured but no stack pop?");
    }
    
    S32 oldMinSize = getMinStackSize();

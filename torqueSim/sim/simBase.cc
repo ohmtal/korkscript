@@ -1803,9 +1803,12 @@ bool SimObject::onAdd()
 
 void SimObject::onRemove()
 {
-   mSimFlags |= ~Added;
+    //XXTH typo in remove Added flag:
+    // mSimFlags |= ~Added;
+    mSimFlags &= ~Added;
+    // <<<
 
-   unlinkNamespaces();
+    unlinkNamespaces();
 }
 
 //-----------------------------------------------------------------------------

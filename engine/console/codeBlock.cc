@@ -83,6 +83,7 @@ CodeBlock::CodeBlock(KorkApi::VmInternal* vm, bool _isExecBlock)
 CodeBlock::~CodeBlock()
 {
    // Make sure we aren't lingering in the current code block...
+   // NOTE: XXTH this happen often!
    AssertFatal(mVM && mVM->mCurrentCodeBlock != this, "CodeBlock::~CodeBlock - Caught lingering in smCurrentCodeBlock!")
 
    removeFromCodeList();
