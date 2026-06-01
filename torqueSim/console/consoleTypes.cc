@@ -491,8 +491,9 @@ ConsoleGetType( TypeF32 )
 
    if (requestedType == KorkApi::ConsoleValue::TypeInternalString)
    {
-      outputStorage->FinalizeStorage(outputStorage, 6);
-      dSprintf((char*)ConsoleGetOutputStoragePtr(), 6, "%.9g", value);
+     // XXTH orig 6 (changed to 32) too less for a float- also chaged from %.9g to %.6f
+      outputStorage->FinalizeStorage(outputStorage, 32);
+      dSprintf((char*)ConsoleGetOutputStoragePtr(), 32, "%.6f", value);
 
       if (outputStorage->data.storageRegister)
       {
@@ -519,14 +520,10 @@ ConsoleGetType( TypeF32 )
 
       if (outputStorage->data.storageRegister)
       {
-        // XXTH seams to be wrong ! F32 >> unsigned ?!
-         // *outputStorage->data.storageRegister =
-         //    (requestedType == KorkApi::ConsoleValue::TypeInternalUnsigned)
-         //    ? KorkApi::ConsoleValue::makeUnsigned(value)
-         //    : KorkApi::ConsoleValue::makeNumber(value);
-
-        *outputStorage->data.storageRegister = KorkApi::ConsoleValue::makeNumber(value);
-
+         *outputStorage->data.storageRegister =
+            (requestedType == KorkApi::ConsoleValue::TypeInternalUnsigned)
+            ? KorkApi::ConsoleValue::makeUnsigned(value)
+            : KorkApi::ConsoleValue::makeNumber(value);
       }
 
       return true;
