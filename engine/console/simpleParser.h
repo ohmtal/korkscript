@@ -1501,6 +1501,10 @@ private:
    ExprNode* parseExpression(int rbp)
    {
       // prefix / primary
+       //XXTH sanity! or crash on using command => foo(
+        if (mTokenPos >= mTokens.size()) {
+            return nullptr;
+        }
       TOK t = mTokens[mTokenPos++];
       
       // Skip begin string
