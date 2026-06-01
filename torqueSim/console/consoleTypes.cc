@@ -471,7 +471,7 @@ ConsoleGetType( TypeF32 )
 
   //XXTH orig: S32 value = 0;
   F32 value = 0.f;
-   
+
    if (inputStorage->isField)
    {
       value = *((F32*)(ConsoleGetInputStoragePtr()));
@@ -480,6 +480,7 @@ ConsoleGetType( TypeF32 )
    {
       if (inputStorage->data.storageRegister[0].typeId == TypeF32)
       {
+         // always return S32 !
          value = *(F32*)(inputStorage->data.storageRegister[0].evaluatePtr(vmPtr->getAllocBase()));
       }
       else
@@ -487,17 +488,17 @@ ConsoleGetType( TypeF32 )
          value = vmPtr->valueAsFloat(inputStorage->data.storageRegister[0]);
       }
    }
-   
+
    if (requestedType == KorkApi::ConsoleValue::TypeInternalString)
    {
       outputStorage->FinalizeStorage(outputStorage, 6);
       dSprintf((char*)ConsoleGetOutputStoragePtr(), 6, "%.9g", value);
-      
+
       if (outputStorage->data.storageRegister)
       {
          *outputStorage->data.storageRegister = outputStorage->data.storageAddress;
       }
-      
+
       return true;
    }
    else if (requestedType == TypeF32 ||
@@ -511,17 +512,20 @@ ConsoleGetType( TypeF32 )
          *dst = value;
 
       }
-      
+
     //XXTH guess the next line should not be here or it's a unfinished statement
     // if (requestedType == KorkApi::ConsoleValue::TypeInternalUnsigned)
-      
+
 
       if (outputStorage->data.storageRegister)
       {
-         *outputStorage->data.storageRegister =
-            (requestedType == KorkApi::ConsoleValue::TypeInternalUnsigned)
-            ? KorkApi::ConsoleValue::makeUnsigned(value)
-            : KorkApi::ConsoleValue::makeNumber(value);
+        // XXTH seams to be wrong ! F32 >> unsigned ?!
+         // *outputStorage->data.storageRegister =
+         //    (requestedType == KorkApi::ConsoleValue::TypeInternalUnsigned)
+         //    ? KorkApi::ConsoleValue::makeUnsigned(value)
+         //    : KorkApi::ConsoleValue::makeNumber(value);
+
+        *outputStorage->data.storageRegister = KorkApi::ConsoleValue::makeNumber(value);
 
       }
 
