@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstring>
+#include <cmath>  //XXTH TEST modulo float
 
 namespace KorkApi
 {
@@ -1709,15 +1710,23 @@ static KorkApi::ConsoleValue performOpNumeric(void* userPtr, KorkApi::Vm* vm, U3
       case Compiler::OP_DIV:
          valueL = (valueR == 0.0f) ? 0.0f : (valueL / valueR);
          break;
-         
+
+         //XXTH TEST modulo float
+//       case Compiler::OP_MOD:
+//       {
+//          const U64 a = (U64)valueL;
+//          const U64 b = (U64)valueR;
+//          valueL = (b == 0u) ? 0.0f : (F32)(a % b);
+//          break;
+//       }
+//
+     //XXTH TEST modulo float
       case Compiler::OP_MOD:
       {
-         const U64 a = (U64)valueL;
-         const U64 b = (U64)valueR;
-         valueL = (b == 0u) ? 0.0f : (F32)(a % b);
-         break;
+            valueL = (valueR == 0.0f) ? 0.0f : std::fmod(valueL, valueR);
+            break;
       }
-         
+
       default:
          break;
    }

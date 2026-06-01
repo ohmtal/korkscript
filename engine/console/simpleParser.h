@@ -1669,10 +1669,11 @@ private:
                ExprNode* right = parseExpression(associativity(op) == LEFT ? opBP : (opBP-1));
                switch (op.asChar())
                {
+                  //XXTH TEST modulo float
                      // Single-char arithmetic etc.
-                  case '+': case '-': case '*': case '/':
+                  case '+': case '-': case '*': case '/': case '%':
                      return FloatBinaryExprNode::alloc(mResources, op.pos.line, processCharOp(op), left, right);
-                  case '%': case '^': case '&': case '|': case '<': case '>':
+                  /*case '%':*/ case '^': case '&': case '|': case '<': case '>':
                      return IntBinaryExprNode::alloc(mResources, op.pos.line, processCharOp(op), left, right);
                   default:
                      errorHere(op, "unsupported operator in expression");

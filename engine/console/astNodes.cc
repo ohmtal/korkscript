@@ -500,6 +500,10 @@ U32 FloatBinaryExprNode::compile(CodeStream &codeStream, U32 ip, TypeReq type)
       case SimpleLexer::TokenType::opPCHAR_ASTERISK:
          operand = OP_MUL;
          break;
+         //XXTH TEST modulo float  added:
+         case SimpleLexer::TokenType::opPCHAR_PERCENT:
+            operand = OP_MOD;
+            break;
       default:
          break;
    }
@@ -567,9 +571,11 @@ void IntBinaryExprNode::getSubTypeOperand()
    case SimpleLexer::TokenType::opPCHAR_CARET:
       operand = OP_XOR;
       break;
-   case SimpleLexer::TokenType::opPCHAR_PERCENT:
-      operand = OP_MOD;
-      break;
+      //XXTH TEST modulo float removed
+   // case SimpleLexer::TokenType::opPCHAR_PERCENT:
+   //    operand = OP_MOD;
+   //    break;
+
    case SimpleLexer::TokenType::opPCHAR_AMPERSAND:
       operand = OP_BITAND;
       break;
@@ -1332,7 +1338,9 @@ static void getAssignOpTypeOp(SimpleLexer::TokenType op, TypeReq &type, U32 &ope
       operand = OP_DIV;
       break;
    case SimpleLexer::TokenType::opPCHAR_PERCENT:
-      type = TypeReqUInt;
+      // type = TypeReqUInt;
+      //XXTH TEST modulo float
+      type = TypeReqFloat;
       operand = OP_MOD;
       break;
    case SimpleLexer::TokenType::opPCHAR_AMPERSAND:

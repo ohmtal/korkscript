@@ -45,6 +45,7 @@
 
 
 #include "console/ast.h"
+#include <cmath> //XXTH TEST modulo float
 
 using namespace Compiler;
 
@@ -1255,13 +1256,29 @@ KorkApi::FiberRunResult ExprEvalState::runVM()
             frame._UINT--;
             break;
             
+        //XXTH TEST modulo float
+         // case OP_MOD:
+         //    if(  evalState.intStack[frame._UINT-1] != 0 )
+         //       evalState.intStack[frame._UINT-1] = evalState.intStack[frame._UINT] % evalState.intStack[frame._UINT-1];
+         //    else
+         //       evalState.intStack[frame._UINT-1] = 0;
+         //    frame._UINT--;
+         //    break;
          case OP_MOD:
-            if(  evalState.intStack[frame._UINT-1] != 0 )
-               evalState.intStack[frame._UINT-1] = evalState.intStack[frame._UINT] % evalState.intStack[frame._UINT-1];
-            else
-               evalState.intStack[frame._UINT-1] = 0;
-            frame._UINT--;
-            break;
+             if (evalState.floatStack[frame._FLT - 1] != 0.0)
+             {
+                 evalState.floatStack[frame._FLT - 1] = std::fmod(
+                     evalState.floatStack[frame._FLT],
+                     evalState.floatStack[frame._FLT - 1]
+                 );
+             }
+             else
+             {
+                 evalState.floatStack[frame._FLT - 1] = 0.0;
+             }
+
+             frame._FLT--;
+             break;
             
          case OP_BITAND:
             evalState.intStack[frame._UINT-1] = evalState.intStack[frame._UINT] & evalState.intStack[frame._UINT-1];

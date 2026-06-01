@@ -22,6 +22,7 @@
 
 #include "sim/dynamicTypes.h"
 #include "embed/compilerOpcodes.h"
+#include <cmath>  //XXTH TEST modulo float
 
 // Init the globals.
 ConsoleBaseType *ConsoleBaseType::smListHead = nullptr;
@@ -228,12 +229,18 @@ KorkApi::ConsoleValue ConsoleBaseType::performOpNumeric(KorkApi::Vm* vm, U32 op,
          valueL = (valueR == 0.0f) ? 0.0f : (valueL / valueR);
          break;
          
+      // case OP_MOD:
+      // {
+      //    const U64 a = (U64)valueL;
+      //    const U64 b = (U64)valueR;
+      //    valueL = (b == 0u) ? 0.0f : (F32)(a % b);
+      //    break;
+      // }
+      //XXTH TEST modulo float
       case OP_MOD:
       {
-         const U64 a = (U64)valueL;
-         const U64 b = (U64)valueR;
-         valueL = (b == 0u) ? 0.0f : (F32)(a % b);
-         break;
+            valueL = (valueR == 0.0f) ? 0.0f : std::fmod(valueL, valueR);
+            break;
       }
          
       default:
@@ -324,10 +331,11 @@ KorkApi::ConsoleValue ConsoleBaseType::performOpUnsigned(KorkApi::Vm* vm, U32 op
       {
          const U64 a = (U64)valueL;
          const U64 b = (U64)valueR;
-         valueL = (b == 0u) ? 0 : (F32)(a % b);
+         //XXTH orig F32?: valueL = (b == 0u) ? 0 : (F32)(a % b);
+         valueL = (b == 0u) ? 0 : (U64)(a % b);
          break;
       }
-         
+
       default:
          break;
    }
