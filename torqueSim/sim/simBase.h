@@ -705,7 +705,7 @@ public:
     /// @param   slotName    Field to access.
     /// @param   array       String containing index into array; if nullptr, it is ignored.
     /// @param   value       Value to store.
-    void setDataField(StringTableEntry slotName, const char *array, const char *value);
+    bool setDataField(StringTableEntry slotName, const char *array, const char *value);
     void setDataFieldDynamic(StringTableEntry slotName, const char *array, const char *value, U32 typeId);
 
     /// Get the type of a field on the object.

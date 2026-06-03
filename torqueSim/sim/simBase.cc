@@ -1667,10 +1667,14 @@ const char *SimObject::tabComplete(const char *prevText, S32 baseLen, bool fForw
 }
 
 //-----------------------------------------------------------------------------
-
-void SimObject::setDataField(StringTableEntry slotName, const char *array, const char *value)
+//XXTH set to bool and added sanity
+bool SimObject::setDataField(StringTableEntry slotName, const char *array, const char *value)
 {
-   getVM()->setObjectField(getVMObject(),slotName, KorkApi::ConsoleValue::makeString(value), KorkApi::ConsoleValue::makeString(array));
+    if (!getVM()) {
+        Con::errorf("SimObject::setDataField getVM is nullptr!!");
+        return false;
+    }
+   return getVM()->setObjectField(getVMObject(),slotName, KorkApi::ConsoleValue::makeString(value), KorkApi::ConsoleValue::makeString(array));
 }
 
 void SimObject::setDataFieldDynamic(StringTableEntry slotName, const char *array, const char *value, U32 typeId)
