@@ -104,7 +104,7 @@ static const F32 F32_MAX = F32(3.402823466e+38F);                 ///< Constant 
 #ifndef TORQUE_OS_ANDROID
       #define TORQUE_OS_ANDROID
 #endif
-#elif defined(EMSCRIPTEN)
+#elif defined(EMSCRIPTEN) || defined(__EMSCRIPTEN__)
 #  define TORQUE_OS_STRING "Emscripten"
 #  define TORQUE_OS_EMSCRIPTEN
 #elif defined(__linux__)
