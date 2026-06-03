@@ -1240,10 +1240,10 @@ public:
    /// Get the modified key for this particular datablock.
    S32 getModifiedKey() const { return modifiedKey; }
 
-   bool onAdd();
+   bool onAdd() override;
    //virtual void onRemove(); T2DJUNK not in T3D or impl in T2D
    
-   virtual void onStaticModified(const char* slotName, const char*newValue = nullptr);
+   virtual void onStaticModified(const char* slotName, const char*newValue = nullptr) override;
    //void setLastError(const char*);
    void assignId();
 
@@ -1276,7 +1276,7 @@ public:
    /// @param   flags   If SelectedOnly is passed here, then
    ///                  only objects marked as selected (using setSelected)
    ///                  will output themselves.
-   virtual void write(Stream &stream, U32 tabStop, U32 flags = 0);
+   virtual void write(Stream &stream, U32 tabStop, U32 flags = 0) override;
 
    /// Used by the console system to automatically tell datablock classes apart
    /// from non-datablock classes.
@@ -1445,8 +1445,8 @@ public:
    void clear();
    /// @}
 
-   virtual void onRemove();
-   virtual void onDeleteNotify(SimObject *object);
+   virtual void onRemove() override;
+   virtual void onDeleteNotify(SimObject *object) override;
 
    /// @name Set Management
    /// @{
@@ -1468,9 +1468,9 @@ public:
 
    void callOnChildren( const char * method, S32 argc, KorkApi::ConsoleValue argv[], bool executeOnChildGroups = true );
 
-   virtual void write(Stream &stream, U32 tabStop, U32 flags = 0);
+   virtual void write(Stream &stream, U32 tabStop, U32 flags = 0) override;
 
-   virtual SimObject *findObject(const char *name);
+   virtual SimObject *findObject(const char *name) override;
    SimObject*  findObjectByInternalName(const char* internalName, bool searchChildren = false);
 
 /* T2DJUNK
@@ -1561,19 +1561,19 @@ public:
    ~SimGroup();
 
    /// Add an object to the group.
-   virtual void addObject(SimObject*);
+   virtual void addObject(SimObject*) override;
    void addObject(SimObject*, SimObjectId);
    void addObject(SimObject*, const char *name);
 
    /// Remove an object from the group.
-   virtual void removeObject(SimObject*);
+   virtual void removeObject(SimObject*) override;
 
-   virtual void onRemove();
+   virtual void onRemove() override;
 
    /// Find an object in the group.
-   virtual SimObject* findObject(const char* name);
+   virtual SimObject* findObject(const char* name) override;
 
-   bool processArguments(S32 argc, const char **argv);
+   bool processArguments(S32 argc, const char **argv) override;
 
    DECLARE_CONOBJECT(SimGroup);
 };

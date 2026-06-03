@@ -85,10 +85,6 @@ typedef unsigned long long  U64;
 #elif defined(EMSCRIPTEN) || defined(__EMSCRIPTEN__) //XXTH also not ?!
 #  define TORQUE_OS_STRING "Emscripten"
 #  define TORQUE_LITTLE_ENDIAN
-// XXTH:
-#  define TORQUE_CPU_X86_64
-#  define TORQUE_64
-
 #else
 #  error "GCC: Unsupported Target CPU"
 #endif
