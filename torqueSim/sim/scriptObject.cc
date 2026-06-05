@@ -165,7 +165,7 @@ bool ScriptGroup::onAdd()
       return false;
    
    // Call onAdd in script!
-   Con::executef(this, "onAdd", Con::getIntArg(getId()));
+   // Con::executef(this, "onAdd", Con::getIntArg(getId()));
    return true;
 }
 

@@ -53,7 +53,7 @@ struct VmInternal
 {
    enum
    {
-      MaxTempStringSize = 16,
+      MaxTempStringSize = 32, //XXTH raised from 16!
       MaxStringConvs = 32,
       ExecReturnBufferSize = 32,
       FileLineBufferSize = 512
