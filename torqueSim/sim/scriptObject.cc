@@ -89,7 +89,7 @@ void ScriptObject::onRemove()
    // We call this on this objects namespace so we unlink them after. - jdd
    //
    // Call onRemove in script!
-   Con::executef(this, "onRemove", Con::getIntArg(getId()));
+   // Con::executef(this, "onRemove", Con::getIntArg(getId()));
    
    Parent::onRemove();
 }
@@ -172,7 +172,7 @@ bool ScriptGroup::onAdd()
 void ScriptGroup::onRemove()
 {
    // Call onRemove in script!
-   Con::executef(this, "onRemove", Con::getIntArg(getId()));
+   // Con::executef(this, "onRemove", Con::getIntArg(getId()));
    
    Parent::onRemove();
 }
