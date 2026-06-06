@@ -773,6 +773,7 @@ ConsoleFunctionValue(schedule, 4, 0, "t , objID || 0 , functionName, arg0, ... ,
       
       refObject = Sim::getRootGroup();
    } else {
+       // just checked on TGE - maybe i missunderstand what the refObject is used for.
        Con::errorf("XXTH FIXME  onObject does NOT work! argv[2]=%s pointer:%p namespaceP:%d"
         , vmPtr->valueAsString(argv[2]),(void*) refObject, (void*) refObject->getNamespace());
        //XXTH FIXME not working !! onObject = true;
