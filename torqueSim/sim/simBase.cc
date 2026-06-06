@@ -761,8 +761,10 @@ ConsoleFunction(getTimeSinceStart, S32, 2, 2, "eventID")
  */
 ConsoleFunctionValue(schedule, 4, 0, "t , objID || 0 , functionName, arg0, ... , argN" )
 {
+   bool onObject = false; //XXTH added
    U32 timeDelta = U32(vmPtr->valueAsFloat(argv[1]));
    if (timeDelta == 0) timeDelta = 1; //XXTH 0 can cause endless loop lock
+
    SimObject *refObject = Sim::findObject(argv[2]);
    if(!refObject)
    {
@@ -770,14 +772,16 @@ ConsoleFunctionValue(schedule, 4, 0, "t , objID || 0 , functionName, arg0, ... ,
          return KorkApi::ConsoleValue::makeUnsigned(0);
       
       refObject = Sim::getRootGroup();
+   } else {
+       Con::errorf("XXTH FIXME  onObject does NOT work! argv[2]=%s pointer:%p namespaceP:%d"
+        , vmPtr->valueAsString(argv[2]),(void*) refObject, (void*) refObject->getNamespace());
+       //XXTH FIXME not working !! onObject = true;
+       return KorkApi::ConsoleValue::makeUnsigned(0);
    }
-   SimConsoleEvent *evt = new SimConsoleEvent(argc - 3, argv + 3, false);
+   SimConsoleEvent *evt = new SimConsoleEvent(argc - 3, argv + 3, onObject);
    
    S32 ret = Sim::postEvent(refObject, evt, Sim::getCurrentTime() + timeDelta);
-   // #ifdef DEBUG
-   //    Con::printf("ref %s schedule(%s) = %d", argv[2], argv[3], ret);
-   //    Con::executef( "backtrace");
-   // #endif
+
    return KorkApi::ConsoleValue::makeUnsigned(ret);
 }
 
@@ -1329,10 +1333,6 @@ ConsoleMethodValue(SimObject,schedule, 4, 0, "time , command , [arg]* ")
    argv[3] = argv[1];
    SimConsoleEvent *evt = new SimConsoleEvent(argc - 2, argv + 2, true);
    U32 ret = Sim::postEvent(object, evt, Sim::getCurrentTime() + timeDelta);
-   // #ifdef DEBUG
-   //    Con::printf("obj %s schedule(%s) = %d", argv[3], argv[2], ret);
-   //    Con::executef( "backtrace");
-   // #endif
    return KorkApi::ConsoleValue::makeUnsigned(ret);
 }
 
@@ -3695,7 +3695,7 @@ void SimConsoleEvent::process(SimObject* object)
          // orig: sVM->callNamespaceFunction(sVM->getGlobalNamespace(), sVM->internString(func), mArgc, mArgv, retV);
          sVM->callNamespaceFunction(sVM->getGlobalNamespace(), sVM->internString(funcName), mArgc, mArgv, retV);
       }
-   }
+   } //not on object end ...
 }
 
 

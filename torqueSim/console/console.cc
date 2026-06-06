@@ -1209,7 +1209,7 @@ KorkApi::ConsoleValue execute(SimObject *object, S32 argc, KorkApi::ConsoleValue
 
       // XXTH maybe should be done somewhere else but i want to prevent a schedule(x,delete) crash
       if (strcmp(funcName, "delete") == 0) {
-#ifdef TORQUE_DEBUG
+#ifdef FLUX_DEBUG // wanted to use TORQUE_DEBUG but this needs more work!
             Con::warnf("DEBUG DELETE is executed from schedule - i call it directly here!");
 #endif
             object->deleteObject();
