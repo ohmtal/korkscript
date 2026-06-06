@@ -1207,6 +1207,17 @@ KorkApi::ConsoleValue execute(SimObject *object, S32 argc, KorkApi::ConsoleValue
    {
       StringTableEntry funcName = sVM->internString((const char*)argv[0].evaluatePtr(sVM->getAllocBase()));
 
+      // XXTH maybe should be done somewhere else but i want to prevent a schedule(x,delete) crash
+      if (strcmp(funcName, "delete") == 0) {
+#ifdef TORQUE_DEBUG
+            Con::warnf("DEBUG DELETE is executed from schedule - i call it directly here!");
+#endif
+            object->deleteObject();
+            return  KorkApi::ConsoleValue();
+      }
+      // <<< XXTH
+
+
       KorkApi::ConsoleValue retValue = KorkApi::ConsoleValue();
 
       object->pushScriptCallbackGuard();

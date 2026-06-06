@@ -1871,6 +1871,7 @@ void SimObject::triggerSignal(void* userPtr, StringTableEntry signalName, int ar
 
       KorkApi::ConsoleValue retValue;
       listener->pushScriptCallbackGuard();
+      // Con::printf("callObjectFunction(signal) %s", binding.methodName ? binding.methodName : signalName); //XXTH TEST
       vm->callObjectFunction(listener->getVMObject(), binding.methodName ? binding.methodName : signalName, callArgc, callArgv, retValue);
       listener->popScriptCallbackGuard();
    }

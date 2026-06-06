@@ -2404,8 +2404,16 @@ const char* VmInternal::tempFloatConv(F64 val)
    if (mConvIndex == MaxStringConvs)
       mConvIndex = 0;
 
-      // XXTH changed from 9g to 6f!
-   snprintf(mTempStringConversions[mConvIndex], MaxTempStringSize, "%.6f", val);
+   // XXTH
+   // changed from 9g to 6f to handle big numbers
+   // ConsoleInt is also internal handled as float
+   // so this floor check should be fix int displayed with .6f
+   if (std::floor(val) == val) {
+      snprintf(mTempStringConversions[mConvIndex], MaxTempStringSize, "%.9g", val);
+   } else {
+      snprintf(mTempStringConversions[mConvIndex], MaxTempStringSize, "%.6f", val);
+   }
+
    return mTempStringConversions[mConvIndex++];
 }
 

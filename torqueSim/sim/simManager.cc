@@ -524,7 +524,13 @@ bool SimObject::registerObject(KorkApi::Vm* inVm, KorkApi::VMObject* evalObject)
 void SimObject::unregisterObject()
 {
    // Sanity!
-   AssertISV( getScriptCallbackGuard() == 0, "SimObject::unregisterObject: Object is being unregistered whilst performing a script callback!" );
+
+   S32 openCallBacks = getScriptCallbackGuard();
+   if (openCallBacks > 0) {
+        Con::errorf("SimObject:unregisterObject while %d callback(s) open!", openCallBacks);
+        //FIXME which callbacks ?
+   }
+   // AssertISV( getScriptCallbackGuard() == 0, "SimObject::unregisterObject: Object is being unregistered whilst performing a script callback!" );
    
    if ( isMethod( "onRemove" ) )
       Con::executef( this, "onRemove" );
@@ -564,7 +570,8 @@ void SimObject::unregisterObject()
 void SimObject::deleteObject()
 {
    // Sanity!
-   AssertISV( getScriptCallbackGuard() == 0, "SimObject::deleteObject: Object is being deleted whilst performing a script callback!" );
+   //XXTH  when delete is called !!
+   // AssertISV( getScriptCallbackGuard() == 0, "SimObject::deleteObject: Object is being deleted whilst performing a script callback!" );
    
    AssertFatal(isProperlyAdded(),
                "SimObject::deleteObject: Object not registered.");
