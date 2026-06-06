@@ -799,7 +799,8 @@ KorkApi::FiberRunResult ExprEvalState::runVM()
       switch(instruction)
       {
          case OP_FUNC_DECL:
-            if(!frame.noCalls)
+            // XXTH : functions must be registered also if noCalls!!
+             // XXTH TEST if(!frame.noCalls)
             {
                tmpFnName       = Compiler::CodeToSTE(nullptr, identStrings, code, ip);
                tmpFnNamespace  = Compiler::CodeToSTE(nullptr, identStrings, code, ip+2);
